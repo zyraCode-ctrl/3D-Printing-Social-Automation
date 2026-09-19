@@ -22,6 +22,8 @@ Repo → **Settings → Secrets and variables → Actions**:
 
 Keep social tokens **out of Actions** until you explicitly approve live publishing.
 
+Follow [INTEGRATION_PRIORITY.md](INTEGRATION_PRIORITY.md): YouTube Shorts OAuth is next; Pinterest then Meta after that.
+
 ## What each run verifies
 
 1. `tracking-api` + `n8n` healthy  

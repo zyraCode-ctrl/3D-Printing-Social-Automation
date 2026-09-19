@@ -1,31 +1,33 @@
-# YouTube Shorts setup (this project)
+# YouTube Shorts setup (active phase)
 
 In this automation, **YouTube always means YouTube Shorts**.  
-Do **not** configure or expect long-form YouTube uploads.
+Do **not** configure long-form YouTube uploads.
 
-Keep `DRY_RUN=true`. Do not publish yet. Do not paste client secrets or tokens into chat.
+**Priority:** step 4 of [INTEGRATION_PRIORITY.md](INTEGRATION_PRIORITY.md) — do this now.  
+Pinterest / Instagram / Facebook come after. Keep `DRY_RUN=true`. Do not publish. Do not paste secrets into chat.
 
-## What Cursor prepared
+## Already prepared in the project
 
-- Gemini prompts generate **Shorts-only** metadata (short title, concise description, lowercase hashtags including `#shorts`, tags/keywords)
-- Workflow **07 YouTube Shorts Publisher** (official YouTube Data API v3 upload path for Shorts)
-- Uses existing Google Drive product media (`local_path` under `/data/media`); videos are treated as Shorts
-- Image-only products are skipped
+- Shorts-only Gemini metadata (title, description, `#shorts` hashtags, tags)
+- Workflow **07 YouTube Shorts Publisher** (YouTube Data API v3 upload)
+- Drive videos treated as Shorts; image-only products skipped
 - n8n credential slot **YouTube account** (`youTubeOAuth2Api`)
-- Privacy default remains `YOUTUBE_PRIVACY_STATUS=private`
-- Instagram / Facebook / Pinterest left unchanged in this update
-- `DRY_RUN=true` blocks upload — nothing is published yet
+- `YOUTUBE_PRIVACY_STATUS=private`
+- Upload path blocked while `DRY_RUN=true`
 
-## Exact first page to open
+## Current step (do this now)
 
-Open Google Cloud Console for APIs:
+Open this page and sign in with the Google account that owns (or will own) the Shorts channel:
 
 **https://console.cloud.google.com/apis/library/youtube.googleapis.com**
 
-Sign in with the Google account that owns (or will own) the YouTube channel you will use for Shorts.
+When that page is open, reply **ready**.
 
-When that page is open, reply **“ready”** and you will get the next click (Enable YouTube Data API v3).
+Next clicks (after you reply ready): Enable **YouTube Data API v3** → create OAuth client → paste Client ID/Secret only into n8n → **Credentials → YouTube account** (never into chat).
 
-## Later (not yet)
+## Out of scope until later priority steps
 
-After the API is enabled you will create an OAuth client and paste Client ID/Secret only into n8n → **Credentials → YouTube account**. Credentials stay local — never in chat.
+- Pinterest OAuth
+- Instagram / Facebook Meta tokens
+- Setting `DRY_RUN=false`
+- Any live Shorts upload

@@ -1,6 +1,10 @@
 # Meta Instagram + Facebook setup (this phase only)
 
-Keep `DRY_RUN=true`. Do **not** publish yet. Pinterest and YouTube are out of scope for this phase.
+Keep `DRY_RUN=true`. Do **not** publish yet.
+
+**Priority:** Instagram and Facebook are steps 6–7 in [INTEGRATION_PRIORITY.md](INTEGRATION_PRIORITY.md). Finish **YouTube Shorts OAuth** (step 4) and **Pinterest** (step 5) before this Meta phase unless Meta access arrives earlier and you deliberately pause those.
+
+Pinterest is a separate later step. YouTube Shorts is the current active social OAuth phase.
 
 ## What Cursor already prepared
 

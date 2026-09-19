@@ -14,6 +14,20 @@ This project does **not** use Zapier, Make, Buffer, upload-post.com, or a custom
 
 Default safety: **`DRY_RUN=true`**. Nothing is published to Instagram, Facebook, Pinterest, or YouTube until you explicitly set `DRY_RUN=false`.
 
+## Integration priority
+
+Exact order: [docs/INTEGRATION_PRIORITY.md](docs/INTEGRATION_PRIORITY.md)
+
+1. Google Drive — done  
+2. Gemini — done  
+3. Content generation — done  
+4. **YouTube Shorts API/OAuth — do now** → [docs/YOUTUBE_SHORTS_SETUP.md](docs/YOUTUBE_SHORTS_SETUP.md)  
+5. Pinterest — after YouTube  
+6. Instagram Meta — after Meta access  
+7. Facebook Meta — after Instagram  
+8. Final full-system DRY_RUN  
+9. Real publishing — only after your explicit approval  
+
 ## Free daily runs (GitHub Actions)
 
 See [docs/GITHUB_ACTIONS_DEPLOY.md](docs/GITHUB_ACTIONS_DEPLOY.md). The repo can run once per day on free GitHub-hosted runners (boot stack → dry-run verify → shut down). Social publishing stays blocked.
@@ -112,40 +126,11 @@ Stop there until the key is saved. Then continue with Google Drive if that crede
 
 ## Connect social accounts (do not publish yet)
 
-Keep `DRY_RUN=true` while you attach credentials. Live posting is a later, explicit approval.
+Follow [docs/INTEGRATION_PRIORITY.md](docs/INTEGRATION_PRIORITY.md). **Current work: YouTube Shorts OAuth only.**
 
-### Instagram + Facebook Page (Meta Graph API)
+Keep `DRY_RUN=true`. Live posting needs your later explicit approval (priority step 9).
 
-Instagram + Facebook use the official Meta Graph API. YouTube is **Shorts-only** (separate Google Cloud OAuth).
-
-Full click-by-click setup: [docs/META_IG_FB_SETUP.md](docs/META_IG_FB_SETUP.md)
-
-Keep `DRY_RUN=true` while attaching credentials. Live posting needs your later explicit approval.
-
-Summary:
-
-1. Create a Meta Developer **Business** app and connect a Facebook Page + Instagram Professional account.
-2. Generate a **Page access token** with `pages_manage_posts`, `instagram_basic`, `instagram_content_publish`, etc.
-3. Put `FACEBOOK_PAGE_ID` and `INSTAGRAM_BUSINESS_ACCOUNT_ID` in `.env`.
-4. In n8n, open **Facebook Graph account** and paste the Page token (never into chat).
-5. Run **09 Meta Auth Probe** to verify auth (does not publish).
-6. Check http://127.0.0.1:8081/meta/readiness
-
-Instagram live publish needs a **publicly reachable** media URL. Local Docker files are not public — use a Drive share link or tunnel only when you go live.
-
-### Pinterest (API v5)
-
-Image Pins only. Videos are skipped on purpose.
-
-1. Open [Pinterest Developers](https://developers.pinterest.com/).
-2. Create an app.
-3. Add redirect `http://localhost:5678/rest/oauth2-credential/callback`.
-4. Request scopes that include pin create / board read (typically `pins:write`, `boards:read`, `boards:write`).
-5. In n8n, add a generic **OAuth2 API** credential for Pinterest and attach it to **06 Pinterest Publisher** → Publish Official API.
-6. Open the target board. The board ID is in the board URL or from `GET https://api.pinterest.com/v5/boards`.
-7. Set `PINTEREST_BOARD_ID` in `.env`.
-
-### YouTube Shorts (YouTube Data API v3)
+### YouTube Shorts (YouTube Data API v3) — do now
 
 In this project, **YouTube means YouTube Shorts only** — never long-form videos.
 
@@ -154,10 +139,35 @@ Setup guide: [docs/YOUTUBE_SHORTS_SETUP.md](docs/YOUTUBE_SHORTS_SETUP.md)
 1. Enable **YouTube Data API v3** in Google Cloud.
 2. Create an OAuth client (Web application) with redirect `http://localhost:5678/rest/oauth2-credential/callback`.
 3. In n8n, open **YouTube account** and complete OAuth (Client ID/Secret stay in n8n only).
-4. Keep `YOUTUBE_PRIVACY_STATUS=private` until you explicitly approve a live Short.
+4. Keep `YOUTUBE_PRIVACY_STATUS=private`.
 5. Keep `DRY_RUN=true` until you explicitly approve publishing.
 
 Drive video products are treated as Shorts. Image-only products skip YouTube.
+
+### Pinterest (API v5) — after YouTube
+
+Image Pins only. Videos are skipped on purpose. Configure only after YouTube Shorts OAuth is done.
+
+1. Open [Pinterest Developers](https://developers.pinterest.com/).
+2. Create an app.
+3. Add redirect `http://localhost:5678/rest/oauth2-credential/callback`.
+4. Request scopes that include pin create / board read (typically `pins:write`, `boards:read`, `boards:write`).
+5. In n8n, add a generic **OAuth2 API** credential for Pinterest and attach it to **06 Pinterest Publisher**.
+6. Set `PINTEREST_BOARD_ID` in `.env`.
+
+### Instagram + Facebook Page (Meta Graph API) — after Meta access
+
+Configure only after Meta developer access is available, and **after** YouTube + Pinterest in the priority list. Instagram first, then Facebook.
+
+Full click-by-click setup: [docs/META_IG_FB_SETUP.md](docs/META_IG_FB_SETUP.md)
+
+1. Create a Meta Developer **Business** app and connect a Facebook Page + Instagram Professional account.
+2. Generate a **Page access token** with the required Graph scopes.
+3. Put `FACEBOOK_PAGE_ID` and `INSTAGRAM_BUSINESS_ACCOUNT_ID` in `.env`.
+4. In n8n, open **Facebook Graph account** and paste the Page token (never into chat).
+5. Run **09 Meta Auth Probe** to verify auth (does not publish).
+
+Instagram live publish needs a **publicly reachable** media URL when you eventually go live.
 
 ## Website URL later
 
