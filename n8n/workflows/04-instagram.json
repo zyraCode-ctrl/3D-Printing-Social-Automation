@@ -1,0 +1,449 @@
+{
+  "id": "3dprInstagram004",
+  "name": "04 Instagram Publisher",
+  "active": false,
+  "isArchived": false,
+  "nodes": [
+    {
+      "id": "148f7906-ae71-50fb-8dff-581d6c5cbe68",
+      "name": "Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -360,
+        -240
+      ],
+      "parameters": {
+        "content": "## Instagram (official Meta Graph API)\n\nUses Facebook Login + Instagram professional account linked to a Page.\n\nFlow (only when DRY_RUN=false):\n1. Create media container `POST /{ig-user-id}/media`\n2. Publish container `POST /{ig-user-id}/media_publish`\n\nRequires:\n- n8n credential **Facebook Graph account** (Page access token)\n- `INSTAGRAM_BUSINESS_ACCOUNT_ID` and `META_GRAPH_VERSION` in `.env`\n- Publicly reachable media URL (Drive share / tunnel) for live posts\n\n`DRY_RUN=true` stops at Duplicate Check \u2014 nothing is posted.\n",
+        "width": 360,
+        "height": 340,
+        "color": 4
+      }
+    },
+    {
+      "id": "38e03742-af4b-5ed9-8d6e-6eb0998ce32e",
+      "name": "When Called by Another Workflow",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {
+        "inputSource": "passthrough"
+      }
+    },
+    {
+      "id": "9a9e17bf-9a02-54f6-bcf9-e129d143a19c",
+      "name": "Duplicate Check",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        240,
+        0
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "={{ 'http://tracking-api:8081/products/' + $json.product_id + '/can-publish?platform=instagram' }}",
+        "options": {
+          "timeout": 60000
+        }
+      }
+    },
+    {
+      "id": "575ac870-2608-5735-84d1-ec315529f6ca",
+      "name": "Allowed to Publish?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        500,
+        0
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "d08ad3a2-7384-5eed-9f44-682eacaa234c",
+              "leftValue": "={{ $json.allowed }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "2bc90b4e-3756-5e53-a2dc-53f77ecb7245",
+      "name": "Blocked Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        760,
+        220
+      ],
+      "parameters": {
+        "jsCode": "const job = $('When Called by Another Workflow').first().json;\nconst check = $json;\nreturn [{ json: {\n  product_id: job.product_id,\n  platform: 'instagram',\n  status: check.dry_run ? 'dry_run_skipped' : (check.status === 'published' ? 'published' : 'skipped'),\n  skipped: true,\n  reason: check.reason,\n  post_id: check.post_id || null\n} }];\n"
+      }
+    },
+    {
+      "id": "5a6740a4-28c3-5c56-beae-0f8881f1b21b",
+      "name": "Load Config",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        760,
+        -120
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "http://tracking-api:8081/config",
+        "options": {
+          "timeout": 60000
+        }
+      }
+    },
+    {
+      "id": "0be6cf37-097f-5d83-b169-d18d46f6d581",
+      "name": "Load Preview",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        980,
+        -120
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "={{ 'http://tracking-api:8081/previews/' + $('When Called by Another Workflow').first().json.product_id }}",
+        "options": {
+          "timeout": 60000
+        }
+      }
+    },
+    {
+      "id": "8427f0a6-706d-50b8-9831-5f80444fc94b",
+      "name": "Prepare Instagram Job",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1220,
+        -120
+      ],
+      "parameters": {
+        "jsCode": "const job = $('When Called by Another Workflow').first().json;\nconst config = $('Load Config').first().json;\nconst preview = $json;\nconst content = (preview && preview.content) || job.content || {};\nconst ig = content.instagram || {};\nif (!config.instagram_business_account_id) {\n  throw new Error('INSTAGRAM_BUSINESS_ACCOUNT_ID is missing in .env / tracking config.');\n}\nconst caption = [ig.caption, (ig.hashtags || []).join(' '), ig.cta].filter(Boolean).join('\\n\\n');\nconst driveId = preview.drive_file_id || job.drive_file_id || null;\nconst publicUrl = job.public_media_url\n  || (driveId ? ('https://drive.google.com/uc?export=download&id=' + driveId) : null);\nif (!publicUrl) {\n  throw new Error('No public_media_url / drive_file_id available for Instagram Graph publishing.');\n}\nconst isImage = String(preview.media_type || job.media_type || '') === 'image'\n  || Boolean(job.image_file && !job.video_file);\nconst version = config.meta_graph_version || 'v22.0';\nconst igUser = config.instagram_business_account_id;\nconst containerBody = isImage\n  ? { image_url: publicUrl, caption }\n  : { media_type: 'REELS', video_url: publicUrl, caption };\nreturn [{ json: {\n  product_id: job.product_id,\n  platform: 'instagram',\n  config,\n  preview,\n  content,\n  caption,\n  public_media_url: publicUrl,\n  drive_file_id: driveId,\n  is_image: isImage,\n  container_url: 'https://graph.facebook.com/' + version + '/' + igUser + '/media',\n  publish_url: 'https://graph.facebook.com/' + version + '/' + igUser + '/media_publish',\n  container_body: containerBody\n} }];\n"
+      }
+    },
+    {
+      "id": "b867a71b-d563-588d-aa26-9e91d9085fb4",
+      "name": "Create Media Container",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        1480,
+        -120
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.container_url }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "facebookGraphApi",
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ JSON.stringify($json.container_body) }}",
+        "options": {
+          "timeout": 180000
+        }
+      },
+      "credentials": {
+        "facebookGraphApi": {
+          "id": "facebookGraphApi",
+          "name": "Facebook Graph account"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "1b8f8c63-dcb2-561b-b525-ff5f584f8d2b",
+      "name": "Build Publish Body",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1720,
+        -120
+      ],
+      "parameters": {
+        "jsCode": "const prepared = $('Prepare Instagram Job').first().json;\nconst created = $json;\nif (created.error) {\n  return [{ json: {\n    product_id: prepared.product_id,\n    platform: 'instagram',\n    status: 'failed',\n    error_message: created.error.message || JSON.stringify(created.error),\n    skip_publish: true\n  } }];\n}\nconst creationId = created.id || created.creation_id;\nif (!creationId) {\n  return [{ json: {\n    product_id: prepared.product_id,\n    platform: 'instagram',\n    status: 'failed',\n    error_message: 'Instagram container create returned no id: ' + JSON.stringify(created).slice(0, 400),\n    skip_publish: true\n  } }];\n}\nreturn [{ json: {\n  ...prepared,\n  creation_id: creationId,\n  skip_publish: false,\n  publish_body: { creation_id: creationId }\n} }];\n"
+      }
+    },
+    {
+      "id": "0dbdfb75-7797-54a0-81fe-c4219ee67b92",
+      "name": "Container OK?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        1960,
+        -120
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "2a121bad-dc8a-53a3-ab24-6faa09524aba",
+              "leftValue": "={{ !$json.skip_publish }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "ac3523bf-1a31-583f-a6ae-31dd04ddedbc",
+      "name": "Publish Media Container",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        2200,
+        -200
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.publish_url }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "facebookGraphApi",
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ JSON.stringify($json.publish_body) }}",
+        "options": {
+          "timeout": 180000
+        }
+      },
+      "credentials": {
+        "facebookGraphApi": {
+          "id": "facebookGraphApi",
+          "name": "Facebook Graph account"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "420c6ea5-4d0c-5c67-a54c-3ef0c3eca9b5",
+      "name": "Interpret Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2440,
+        -120
+      ],
+      "parameters": {
+        "jsCode": "const prepared = $('Prepare Instagram Job').first().json;\nconst built = $('Build Publish Body').first().json;\nconst response = $json;\nif (built.skip_publish) {\n  return [{ json: {\n    product_id: prepared.product_id,\n    platform: 'instagram',\n    status: 'failed',\n    error_message: built.error_message || 'container create failed'\n  } }];\n}\nif (response.error) {\n  return [{ json: {\n    product_id: prepared.product_id,\n    platform: 'instagram',\n    status: 'failed',\n    error_message: response.error.message || JSON.stringify(response.error)\n  } }];\n}\nconst postId = response.id || response.post_id || null;\nif (!postId) {\n  return [{ json: {\n    product_id: prepared.product_id,\n    platform: 'instagram',\n    status: 'failed',\n    error_message: 'No Instagram media id in publish response: ' + JSON.stringify(response).slice(0, 400)\n  } }];\n}\nreturn [{ json: {\n  product_id: prepared.product_id,\n  platform: 'instagram',\n  status: 'published',\n  post_id: String(postId)\n} }];\n"
+      }
+    },
+    {
+      "id": "6e57e74f-b8d8-53df-8417-353d6d5ff35d",
+      "name": "Store Platform Result",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        2680,
+        40
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ 'http://tracking-api:8081/products/' + $json.product_id + '/platform-result' }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ platform: $json.platform, status: $json.status === 'dry_run_skipped' ? 'pending' : ($json.status === 'skipped' ? 'skipped' : $json.status), post_id: $json.post_id || null, error_message: $json.error_message || $json.reason || null }) }}",
+        "options": {
+          "timeout": 120000
+        }
+      }
+    }
+  ],
+  "connections": {
+    "When Called by Another Workflow": {
+      "main": [
+        [
+          {
+            "node": "Duplicate Check",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Duplicate Check": {
+      "main": [
+        [
+          {
+            "node": "Allowed to Publish?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Allowed to Publish?": {
+      "main": [
+        [
+          {
+            "node": "Load Config",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Blocked Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Config": {
+      "main": [
+        [
+          {
+            "node": "Load Preview",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Preview": {
+      "main": [
+        [
+          {
+            "node": "Prepare Instagram Job",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Instagram Job": {
+      "main": [
+        [
+          {
+            "node": "Create Media Container",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Media Container": {
+      "main": [
+        [
+          {
+            "node": "Build Publish Body",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Publish Body": {
+      "main": [
+        [
+          {
+            "node": "Container OK?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Container OK?": {
+      "main": [
+        [
+          {
+            "node": "Publish Media Container",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Interpret Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Publish Media Container": {
+      "main": [
+        [
+          {
+            "node": "Interpret Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Interpret Result": {
+      "main": [
+        [
+          {
+            "node": "Store Platform Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Blocked Result": {
+      "main": [
+        [
+          {
+            "node": "Store Platform Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Asia/Kolkata",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false,
+    "errorWorkflow": "3dprErrorLog008"
+  },
+  "pinData": {},
+  "versionId": "4b4f15be-9c07-5b78-8e0f-da07f5bb4e5d",
+  "meta": {
+    "templateCredsSetupCompleted": false
+  },
+  "tags": []
+}

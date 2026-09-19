@@ -1,0 +1,191 @@
+{
+  "id": "3dprMetaAuthProbe09",
+  "name": "09 Meta Auth Probe",
+  "active": false,
+  "isArchived": false,
+  "nodes": [
+    {
+      "id": "67acdbf0-c292-5eff-9e58-9998948bdf09",
+      "name": "Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -400,
+        -220
+      ],
+      "parameters": {
+        "content": "## Meta Auth Probe (Instagram + Facebook)\n\nManual test only. Does **not** publish.\n\nAfter you paste a Page access token into **Facebook Graph account**:\n1. Set `FACEBOOK_PAGE_ID` in `.env` and restart tracking-api / re-import if needed.\n2. Run this workflow manually.\n3. Confirm `me/accounts` lists your Page and Instagram business account id.\n\nKeep `DRY_RUN=true`. Pinterest/YouTube are out of scope for this phase.\n",
+        "width": 380,
+        "height": 320,
+        "color": 5
+      }
+    },
+    {
+      "id": "ea377bc6-9768-5436-b3f1-137bf3a9d8ca",
+      "name": "Run Manually",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {}
+    },
+    {
+      "id": "3499b195-10c4-5cbf-9ef0-efa08245e8cc",
+      "name": "Load Config",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        240,
+        0
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "http://tracking-api:8081/config",
+        "options": {
+          "timeout": 60000
+        }
+      }
+    },
+    {
+      "id": "6b1326ca-a9c7-518b-828b-b5587b46fb37",
+      "name": "Meta Readiness",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        480,
+        0
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "http://tracking-api:8081/meta/readiness",
+        "options": {
+          "timeout": 60000
+        }
+      }
+    },
+    {
+      "id": "7a811c77-308c-5999-a948-9df7050d5aa9",
+      "name": "Build Probe URLs",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        720,
+        0
+      ],
+      "parameters": {
+        "jsCode": "const config = $('Load Config').first().json;\nconst readiness = $json;\nconst version = config.meta_graph_version || 'v22.0';\nconst pageId = config.facebook_page_id || '';\nreturn [{ json: {\n  readiness,\n  dry_run: config.dry_run,\n  page_id: pageId,\n  ig_user_id: config.instagram_business_account_id || '',\n  accounts_url: 'https://graph.facebook.com/' + version + '/me/accounts?fields=id,name,access_token,instagram_business_account',\n  page_url: pageId\n    ? ('https://graph.facebook.com/' + version + '/' + pageId + '?fields=id,name,instagram_business_account')\n    : '',\n} }];\n"
+      }
+    },
+    {
+      "id": "00b6e9c5-b216-5317-8989-31217166c1cb",
+      "name": "Probe me/accounts",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        980,
+        -80
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $json.accounts_url }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "facebookGraphApi",
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "credentials": {
+        "facebookGraphApi": {
+          "id": "facebookGraphApi",
+          "name": "Facebook Graph account"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "836b63a4-5bc7-5dc8-81b4-1cad6b783006",
+      "name": "Summarize Probe",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1240,
+        -80
+      ],
+      "parameters": {
+        "jsCode": "const built = $('Build Probe URLs').first().json;\nconst accounts = $json;\nconst pages = accounts.data || [];\nconst pageMatch = pages.find((p) => String(p.id) === String(built.page_id)) || pages[0] || null;\nconst igFromPage = pageMatch && pageMatch.instagram_business_account\n  ? pageMatch.instagram_business_account.id\n  : null;\nreturn [{ json: {\n  dry_run: built.dry_run,\n  readiness: built.readiness,\n  graph_ok: !accounts.error && Array.isArray(pages),\n  error: accounts.error ? (accounts.error.message || JSON.stringify(accounts.error)) : null,\n  pages_found: pages.map((p) => ({ id: p.id, name: p.name, ig: (p.instagram_business_account || {}).id || null })),\n  configured_page_id: built.page_id || null,\n  configured_ig_user_id: built.ig_user_id || null,\n  discovered_ig_user_id: igFromPage,\n  ids_match: Boolean(built.ig_user_id) && String(built.ig_user_id) === String(igFromPage || ''),\n  note: 'No content was published. Keep DRY_RUN=true until you explicitly approve a live post.'\n} }];\n"
+      }
+    }
+  ],
+  "connections": {
+    "Run Manually": {
+      "main": [
+        [
+          {
+            "node": "Load Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Config": {
+      "main": [
+        [
+          {
+            "node": "Meta Readiness",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Meta Readiness": {
+      "main": [
+        [
+          {
+            "node": "Build Probe URLs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Probe URLs": {
+      "main": [
+        [
+          {
+            "node": "Probe me/accounts",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Probe me/accounts": {
+      "main": [
+        [
+          {
+            "node": "Summarize Probe",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Asia/Kolkata",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false,
+    "errorWorkflow": "3dprErrorLog008"
+  },
+  "pinData": {},
+  "versionId": "2ede1c81-b93b-5ad3-8aaa-68d8b5e67d0f",
+  "meta": {
+    "templateCredsSetupCompleted": false
+  },
+  "tags": []
+}

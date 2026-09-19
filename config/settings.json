@@ -1,0 +1,47 @@
+{
+  "timezone": "Asia/Kolkata",
+  "daily_cron": "0 9 * * *",
+  "markets": ["United States", "Canada", "United Kingdom", "Australia"],
+  "supported_images": ["jpg", "jpeg", "png", "webp"],
+  "supported_videos": ["mp4", "mov"],
+  "required_platforms": {
+    "image": ["instagram", "facebook", "pinterest"],
+    "video": ["instagram", "facebook", "youtube"],
+    "both": ["instagram", "facebook", "pinterest", "youtube"]
+  },
+  "platform_capabilities": {
+    "instagram": {
+      "image": true,
+      "video": true,
+      "notes": "Images via feed post. Videos via Reels. Official Graph API requires a publicly reachable media URL for publishing."
+    },
+    "facebook": {
+      "image": true,
+      "video": true,
+      "notes": "Publishes to a Facebook Page. Binary upload is supported by Graph API."
+    },
+    "pinterest": {
+      "image": true,
+      "video": false,
+      "notes": "Official Pins API is used for image Pins (image_base64). Video Pins are skipped — they need a separate media-upload flow and are not assumed here."
+    },
+    "youtube": {
+      "image": false,
+      "video": true,
+      "notes": "YouTube Shorts only via YouTube Data API v3. Image-only products are skipped. Long-form uploads are not used."
+    }
+  },
+  "youtube_privacy_status": "private",
+  "youtube_format": "shorts",
+  "website_url": "",
+  "include_website_url": false,
+  "google_drive_folder_id": "1MU6xHdcI18mCbDsp1IxAyA9YoDfeRQKD",
+  "drive_access_mode": "public",
+  "ai": {
+    "provider": "gemini",
+    "gemini_model": "gemini-3.6-flash",
+    "gemini_host": "https://generativelanguage.googleapis.com",
+    "ollama_model": "llava",
+    "ollama_base_url": "http://ollama:11434"
+  }
+}

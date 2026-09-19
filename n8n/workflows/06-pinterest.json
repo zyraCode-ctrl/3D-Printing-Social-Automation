@@ -1,0 +1,245 @@
+{
+  "id": "3dprPinterest06",
+  "name": "06 Pinterest Publisher",
+  "active": false,
+  "isArchived": false,
+  "nodes": [
+    {
+      "id": "24886b27-b778-5751-bbf0-26d93263b837",
+      "name": "Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -340,
+        -200
+      ],
+      "parameters": {
+        "content": "## Pinterest (official API v5)\n\nCreates **image Pins** only, using `media_source.source_type = image_url` or `image_base64`.\n\nVideo products are skipped on purpose. Do not assume video Pin upload works without the media-upload dance.\n\nSet `PINTEREST_BOARD_ID` and attach a Pinterest OAuth2 credential (generic OAuth2) to the HTTP node.\n",
+        "width": 320,
+        "height": 300,
+        "color": 4
+      }
+    },
+    {
+      "id": "a432c31d-e276-5de2-9c45-10855a7d663d",
+      "name": "When Called by Another Workflow",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {
+        "inputSource": "passthrough"
+      }
+    },
+    {
+      "id": "93e8ab75-6fca-59e6-85d7-f6d1d5c59611",
+      "name": "Duplicate Check",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        240,
+        0
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "={{ 'http://tracking-api:8081/products/' + $json.product_id + '/can-publish?platform=pinterest' }}",
+        "options": {
+          "timeout": 60000
+        }
+      }
+    },
+    {
+      "id": "da6d38f3-d441-52f4-b6da-9cf828d6a266",
+      "name": "Allowed to Publish?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        500,
+        0
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "5a8ab870-1e3d-56fe-8a0f-eef49a04f320",
+              "leftValue": "={{ $json.allowed }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "a618291d-ca1c-5e17-9b29-1c4920f82cd5",
+      "name": "Blocked Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        760,
+        180
+      ],
+      "parameters": {
+        "jsCode": "const job = $('When Called by Another Workflow').first().json;\nconst check = $json;\nreturn [{ json: {\n  product_id: job.product_id,\n  platform: 'pinterest',\n  status: check.dry_run ? 'dry_run_skipped' : (check.status === 'published' ? 'published' : 'skipped'),\n  skipped: true,\n  reason: check.reason,\n  post_id: check.post_id || null,\n  job\n} }];\n"
+      }
+    },
+    {
+      "id": "c2fb172c-1c87-54a8-b468-7e72b648f36e",
+      "name": "Publish Official API",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        760,
+        -40
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.pinterest.com/v5/pins",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ board_id: $json.config.pinterest_board_id, title: $json.content.pinterest.title, description: $json.content.pinterest.description, alt_text: $json.content.pinterest.title, media_source: { source_type: 'image_url', url: $json.public_media_url } }) }}",
+        "options": {
+          "timeout": 120000
+        },
+        "authentication": "genericCredentialType",
+        "genericAuthType": "oAuth2Api"
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "bd0fcbfe-9ca6-5b1d-8952-3668d9f547bb",
+      "name": "Interpret Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1020,
+        -40
+      ],
+      "parameters": {
+        "jsCode": "const job = $('When Called by Another Workflow').first().json;\nconst response = $json;\nconst err = response.error || response.error_message || response.message;\nconst failed = Boolean(response.error) || (response.error && response.error.message);\nlet postId = response.id || response.post_id || (response.permalink_url ? String(response.id) : null);\nif (response.creation_id) postId = response.creation_id;\nif (response.data && response.data.id) postId = response.data.id;\nif ($('When Called by Another Workflow').first().json.media_type === 'video') {\n  return [{ json: { product_id: job.product_id, platform: 'pinterest', status: 'skipped', skipped: true, reason: 'Media type not supported on this platform', job } }];\n}\nif (failed || (!postId && response.error)) {\n  return [{ json: { product_id: job.product_id, platform: 'pinterest', status: 'failed', error_message: err || JSON.stringify(response), job } }];\n}\nif (!postId && response.status !== 'published') {\n  // Graph-style publish can return an id on success; if the body looks empty, treat as failure with the raw payload.\n  const looksOk = response.id || response.permalink || response.videoId || (response.headers && false);\n  if (!looksOk) {\n    return [{ json: { product_id: job.product_id, platform: 'pinterest', status: 'failed', error_message: err || ('No post id in response: ' + JSON.stringify(response).slice(0, 500)), job } }];\n  }\n}\nreturn [{ json: { product_id: job.product_id, platform: 'pinterest', status: 'published', post_id: postId, job } }];\n"
+      }
+    },
+    {
+      "id": "5679bffe-5e8a-5e5b-82e7-dc04beaf9741",
+      "name": "Store Platform Result",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        1280,
+        40
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ 'http://tracking-api:8081/products/' + $json.product_id + '/platform-result' }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ platform: $json.platform, status: $json.status === 'dry_run_skipped' ? 'pending' : ($json.status === 'skipped' ? 'skipped' : $json.status), post_id: $json.post_id || null, error_message: $json.error_message || $json.reason || null }) }}",
+        "options": {
+          "timeout": 120000
+        }
+      }
+    }
+  ],
+  "connections": {
+    "When Called by Another Workflow": {
+      "main": [
+        [
+          {
+            "node": "Duplicate Check",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Duplicate Check": {
+      "main": [
+        [
+          {
+            "node": "Allowed to Publish?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Allowed to Publish?": {
+      "main": [
+        [
+          {
+            "node": "Publish Official API",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Blocked Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Publish Official API": {
+      "main": [
+        [
+          {
+            "node": "Interpret Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Interpret Result": {
+      "main": [
+        [
+          {
+            "node": "Store Platform Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Blocked Result": {
+      "main": [
+        [
+          {
+            "node": "Store Platform Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Asia/Kolkata",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false,
+    "errorWorkflow": "3dprErrorLog008"
+  },
+  "pinData": {},
+  "versionId": "2ed0fa8b-862f-5129-b3cd-a00630c357e5",
+  "meta": {
+    "templateCredsSetupCompleted": false
+  },
+  "tags": []
+}

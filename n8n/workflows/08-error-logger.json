@@ -1,0 +1,81 @@
+{
+  "id": "3dprErrorLog008",
+  "name": "08 Error Logger",
+  "active": false,
+  "isArchived": false,
+  "nodes": [
+    {
+      "id": "a4212235-2f4b-5fe0-8420-7cf908dbbc0e",
+      "name": "Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -280,
+        -160
+      ],
+      "parameters": {
+        "content": "## Error Logger\nCatches failed executions and writes them to SQLite via the tracking API.",
+        "width": 280,
+        "height": 180,
+        "color": 3
+      }
+    },
+    {
+      "id": "80b5a7ce-86be-5192-b318-2997ff240fc9",
+      "name": "Error Trigger",
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {}
+    },
+    {
+      "id": "b8e2296e-0b22-5df5-b2bb-b07daa708575",
+      "name": "Log Error",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        260,
+        0
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "http://tracking-api:8081/logs",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ level: 'error', event: 'workflow_error', product_id: $json.execution?.id ? undefined : $json.product_id, message: $json.execution?.error?.message || $json.message || 'Workflow failed', details: $json }) }}",
+        "options": {
+          "timeout": 120000
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Error Trigger": {
+      "main": [
+        [
+          {
+            "node": "Log Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Asia/Kolkata",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false,
+    "errorWorkflow": ""
+  },
+  "pinData": {},
+  "versionId": "57ccad85-f204-59ca-9e1d-2535887c86d8",
+  "meta": {
+    "templateCredsSetupCompleted": false
+  },
+  "tags": []
+}

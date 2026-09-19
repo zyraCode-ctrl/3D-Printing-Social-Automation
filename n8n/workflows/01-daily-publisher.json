@@ -1,0 +1,1022 @@
+{
+  "id": "3dprDailyPub0001",
+  "name": "01 Daily Publisher",
+  "active": false,
+  "isArchived": false,
+  "nodes": [
+    {
+      "id": "26251192-08f4-5e4c-b914-febc8644f448",
+      "name": "Overview",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -440,
+        -40
+      ],
+      "parameters": {
+        "content": "## Daily Publisher\nPublic Google Drive folder \u2192 download media \u2192 Gemini vision AI \u2192 preview.\n\nStops before social posting while `DRY_RUN=true`.\n\nUses the shared folder ID from config. Does not use the n8n Google Drive OAuth node for listing/download (avoids project SERVICE_DISABLED 403).",
+        "width": 320,
+        "height": 340,
+        "color": 6
+      }
+    },
+    {
+      "id": "096d2d1c-4a04-5bc7-87e6-85b3a84be123",
+      "name": "Every Day 9AM Kolkata",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.4,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 9 * * *"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "6eee46d0-4ad7-5e6d-866d-d5107528aca9",
+      "name": "Run Manually",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        200
+      ],
+      "parameters": {}
+    },
+    {
+      "id": "801dbe49-119a-5935-8f83-2e86bdf707c6",
+      "name": "When Called by Another Workflow",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        400
+      ],
+      "parameters": {
+        "inputSource": "passthrough"
+      }
+    },
+    {
+      "id": "ebea9891-6226-528a-a173-94116bb5fd1b",
+      "name": "Load Config",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        280,
+        160
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "http://tracking-api:8081/config",
+        "options": {
+          "timeout": 60000
+        }
+      }
+    },
+    {
+      "id": "6ee0870c-661e-531b-a62f-cca2578db059",
+      "name": "Log Daily Start",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        520,
+        160
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "http://tracking-api:8081/logs",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ level: 'info', event: 'daily_execution', message: 'Daily publisher started', details: { dry_run: $json.dry_run, timezone: $json.timezone, folder: $json.google_drive_folder_id, ai_provider: $json.ai_provider } }) }}",
+        "options": {
+          "timeout": 120000
+        }
+      }
+    },
+    {
+      "id": "e5383093-563d-5a3e-89ab-f618930a3114",
+      "name": "Drive Folder Configured?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        760,
+        160
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "b21744d4-6dd5-5abe-95d8-0a16fa0d5107",
+              "leftValue": "={{ $('Load Config').first().json.google_drive_folder_id }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "e714ecc5-4e5a-5134-b8db-fddd32a21d5c",
+      "name": "Stop Missing Folder ID",
+      "type": "n8n-nodes-base.stopAndError",
+      "typeVersion": 1,
+      "position": [
+        1000,
+        360
+      ],
+      "parameters": {
+        "errorType": "errorMessage",
+        "errorMessage": "GOOGLE_DRIVE_FOLDER_ID is empty. Paste the folder ID from the Drive URL into .env, restart Compose, then connect Google Drive OAuth in n8n."
+      }
+    },
+    {
+      "id": "77aa2219-d1d4-5013-bfc6-19478ea80378",
+      "name": "List Google Drive Folder",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        1000,
+        40
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "http://tracking-api:8081/drive/public-list",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ folder_id: $('Load Config').first().json.google_drive_folder_id }) }}",
+        "options": {
+          "timeout": 120000
+        }
+      }
+    },
+    {
+      "id": "690b2af0-eb79-5ca0-a31b-55223d735f71",
+      "name": "Normalize Drive List",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1240,
+        40
+      ],
+      "parameters": {
+        "jsCode": "const payload = $json;\nconst files = (payload.files || []).map((item) => ({\n  name: item.name,\n  id: item.id || item.drive_file_id,\n  drive_file_id: item.drive_file_id || item.id,\n  mimeType: item.mimeType,\n  thumbnailLink: item.thumbnailLink,\n  webViewLink: item.webViewLink,\n})).filter((file) => file.name && file.drive_file_id);\nif (!files.length) {\n  throw new Error('Google Drive returned no files from the public folder. Confirm sharing is Anyone with the link and GOOGLE_DRIVE_FOLDER_ID is correct.');\n}\nreturn [{ json: { files, drive_access_mode: payload.access_mode || 'public', drive_list_method: payload.method } }];\n"
+      }
+    },
+    {
+      "id": "c4fb807d-d29f-514d-a7a3-f7c6a218438c",
+      "name": "Select Next Product",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        1480,
+        40
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "http://tracking-api:8081/products/select-next",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ files: $json.files || [] }) }}",
+        "options": {
+          "timeout": 120000
+        }
+      }
+    },
+    {
+      "id": "9b06814d-648a-5f4d-9ee6-d0ed7bbd290b",
+      "name": "Product Found?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        1720,
+        40
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "f3b06fa3-5675-54a8-aac7-955d9ccb2930",
+              "leftValue": "={{ $json.found }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "2f533a71-be1e-54e7-968a-8e22111970f7",
+      "name": "Log No Product",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        1960,
+        280
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "http://tracking-api:8081/logs",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ level: 'info', event: 'no_product', message: $json.reason || 'No product to process', details: $json }) }}",
+        "options": {
+          "timeout": 120000
+        }
+      }
+    },
+    {
+      "id": "aac62c74-3021-55cc-a8fd-ddc82a64bcbd",
+      "name": "Idle",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        2200,
+        280
+      ],
+      "parameters": {}
+    },
+    {
+      "id": "6a388b3d-1c8b-5773-b814-d260fda2c15e",
+      "name": "Mark Processing",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        1960,
+        -80
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ 'http://tracking-api:8081/products/' + $json.product_id + '/processing' }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({}) }}",
+        "options": {
+          "timeout": 120000
+        }
+      }
+    },
+    {
+      "id": "b0b94817-b56b-5a99-b686-65acf60f815f",
+      "name": "Pick Vision File",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2200,
+        -80
+      ],
+      "parameters": {
+        "jsCode": "const selected = $('Select Next Product').first().json;\nconst config = $('Load Config').first().json;\nconst vision = selected.image_file || selected.video_file;\nif (!vision || !vision.drive_file_id) {\n  throw new Error('Product ' + selected.product_id + ' has no Google Drive file ID. Check the filename pattern ProductID.ext.');\n}\nreturn [{ json: {\n  ...selected,\n  config,\n  vision_file: vision,\n  filename: vision.filename,\n  drive_file_id: vision.drive_file_id,\n  local_path: '/data/media/' + vision.filename\n} }];\n"
+      }
+    },
+    {
+      "id": "c12fd688-5a32-5a0c-8066-5bfb7bf7c5df",
+      "name": "Download Drive Media",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        2440,
+        -80
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "http://tracking-api:8081/drive/public-download",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ file_id: $json.drive_file_id, filename: $json.filename, folder_id: $('Load Config').first().json.google_drive_folder_id }) }}",
+        "options": {
+          "timeout": 120000
+        }
+      }
+    },
+    {
+      "id": "17e05c5c-ec00-5e17-97ca-540a0a3e2c7a",
+      "name": "Save Media to Disk",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2680,
+        -80
+      ],
+      "parameters": {
+        "jsCode": "const picked = $('Pick Vision File').first().json;\nconst downloaded = $json;\nif (!downloaded.ok || !downloaded.local_path) {\n  throw new Error('Public Drive download failed: ' + JSON.stringify(downloaded).slice(0, 400));\n}\nreturn [{ json: { ...picked, local_path: downloaded.local_path, download_bytes: downloaded.bytes, drive_access_mode: downloaded.access_mode || 'public' } }];\n"
+      }
+    },
+    {
+      "id": "c9c26127-a343-5cd6-99a2-36ef4e91cf54",
+      "name": "Prepare Vision Still",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        2920,
+        -80
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "http://tracking-api:8081/media/prepare-vision",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ local_path: $json.local_path, media_kind: $json.vision_file.media_kind, product_id: $json.product_id }) }}",
+        "options": {
+          "timeout": 120000
+        }
+      }
+    },
+    {
+      "id": "4c6dff5e-2d8e-52ea-a3aa-657c2771600c",
+      "name": "Build AI Job",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3160,
+        -80
+      ],
+      "parameters": {
+        "jsCode": "const selected = $('Pick Vision File').first().json;\nconst vision = $json;\nif (!vision.base64) {\n  throw new Error('Could not prepare a still image for AI vision: ' + JSON.stringify(vision).slice(0, 400));\n}\nreturn [{ json: {\n  ...selected,\n  vision_base64: vision.base64,\n  vision_mime: vision.mime_type || 'image/jpeg',\n  vision_source: vision.source,\n  local_path: selected.local_path\n} }];\n"
+      }
+    },
+    {
+      "id": "14b772ac-100f-5ece-b7a0-cfd624830588",
+      "name": "Generate AI Content",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.3,
+      "position": [
+        3400,
+        -80
+      ],
+      "parameters": {
+        "source": "database",
+        "workflowId": {
+          "__rl": true,
+          "value": "3dprAiContent003",
+          "mode": "id",
+          "cachedResultName": "03 AI Content Generator"
+        },
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      }
+    },
+    {
+      "id": "c1c8cd74-d9a7-5d95-a5c3-a52b3005d9b4",
+      "name": "Build Preview Payload",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3520,
+        -80
+      ],
+      "parameters": {
+        "jsCode": "const ai = $('Generate AI Content').first().json;\nconst src = ai || $json;\nconst picked = $('Pick Vision File').first().json;\nconst config = $('Load Config').first().json;\nif (src.error && !src.content) {\n  throw new Error('AI step failed before preview save: ' + String(src.error));\n}\nif (!src.content) {\n  throw new Error('Generate AI Content returned no content object. Refusing to save preview.');\n}\nconst dryRun = !!(src.config && typeof src.config.dry_run !== 'undefined'\n  ? src.config.dry_run\n  : config.dry_run);\nconst productId = src.product_id || picked.product_id;\nconst previewBody = {\n  product_id: productId,\n  filename: src.filename || picked.filename || null,\n  media_type: src.media_type || picked.media_type || null,\n  drive_file_id: src.drive_file_id || picked.drive_file_id || null,\n  google_drive_folder_id: (src.config && src.config.google_drive_folder_id)\n    || config.google_drive_folder_id\n    || null,\n  local_path: src.local_path || picked.local_path || null,\n  vision_notes: src.vision_notes || null,\n  vision_source: src.vision_source || null,\n  ai_provider_used: src.ai_provider_used || null,\n  gemini_model_used: src.gemini_model_used || null,\n  dry_run: dryRun,\n  content: src.content,\n};\nreturn [{ json: { ...src, product_id: productId, dry_run: dryRun, previewBody } }];\n"
+      }
+    },
+    {
+      "id": "433d5ff2-b732-5db7-b358-b79c3fde4436",
+      "name": "Save Preview",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        3640,
+        -80
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "http://tracking-api:8081/previews",
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ JSON.stringify($json.previewBody) }}",
+        "options": {
+          "timeout": 120000
+        }
+      }
+    },
+    {
+      "id": "5e0fdcd4-78bb-5aec-9106-09e52a2c21d8",
+      "name": "DRY RUN?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        3880,
+        -80
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "876517fb-8b46-5dbb-af1c-dd2610ead5cf",
+              "leftValue": "={{ $('Load Config').first().json.dry_run }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "d835c6ec-0c3f-5c0a-8b92-987bbd075404",
+      "name": "Build Dry Run Log",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        4000,
+        -200
+      ],
+      "parameters": {
+        "jsCode": "const src = $json;\nconst ai = $('Generate AI Content').first().json;\nconst picked = $('Pick Vision File').first().json;\nconst productId = src.product_id || ai.product_id || picked.product_id;\nconst logBody = {\n  level: 'info',\n  event: 'dry_run_preview',\n  product_id: productId,\n  message: 'DRY_RUN saved real AI preview and skipped all social publishing',\n  details: {\n    product_id: productId,\n    ai_provider_used: ai.ai_provider_used,\n    vision_notes: ai.vision_notes,\n  },\n};\nreturn [{ json: { ...src, product_id: productId, logBody } }];\n"
+      }
+    },
+    {
+      "id": "ee52aee7-a37b-52cc-8677-295fd33b1897",
+      "name": "Log Dry Run Preview",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        4120,
+        -200
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "http://tracking-api:8081/logs",
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ JSON.stringify($json.logBody) }}",
+        "options": {
+          "timeout": 120000
+        }
+      }
+    },
+    {
+      "id": "f472e974-5a02-52cc-9b07-f62deafe53e6",
+      "name": "Finalize Dry Run",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        4360,
+        -200
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ 'http://tracking-api:8081/products/' + $('Pick Vision File').first().json.product_id + '/finalize' }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({}) }}",
+        "options": {
+          "timeout": 120000
+        }
+      }
+    },
+    {
+      "id": "7883121b-f0be-587c-9876-c5156aabd399",
+      "name": "Publish Instagram",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.3,
+      "position": [
+        4120,
+        80
+      ],
+      "parameters": {
+        "source": "database",
+        "workflowId": {
+          "__rl": true,
+          "value": "3dprInstagram004",
+          "mode": "id",
+          "cachedResultName": "04 Instagram Publisher"
+        },
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "a5572af8-b3ec-511c-9960-2fb99b3f48f4",
+      "name": "Publish Facebook",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.3,
+      "position": [
+        4360,
+        80
+      ],
+      "parameters": {
+        "source": "database",
+        "workflowId": {
+          "__rl": true,
+          "value": "3dprFacebook005",
+          "mode": "id",
+          "cachedResultName": "05 Facebook Publisher"
+        },
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "5d8545ef-0113-59ba-9275-230ffbf63f4a",
+      "name": "Publish Pinterest",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.3,
+      "position": [
+        4600,
+        80
+      ],
+      "parameters": {
+        "source": "database",
+        "workflowId": {
+          "__rl": true,
+          "value": "3dprPinterest06",
+          "mode": "id",
+          "cachedResultName": "06 Pinterest Publisher"
+        },
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "df6e921a-9c89-554e-a295-3e2c23006505",
+      "name": "Publish YouTube",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.3,
+      "position": [
+        4840,
+        80
+      ],
+      "parameters": {
+        "source": "database",
+        "workflowId": {
+          "__rl": true,
+          "value": "3dprYouTube0007",
+          "mode": "id",
+          "cachedResultName": "07 YouTube Shorts Publisher"
+        },
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "edac9298-6253-5363-b490-88a9939d4c48",
+      "name": "Finalize Product",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        5080,
+        80
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ 'http://tracking-api:8081/products/' + $('Pick Vision File').first().json.product_id + '/finalize' }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({}) }}",
+        "options": {
+          "timeout": 120000
+        }
+      }
+    },
+    {
+      "id": "c0c403a7-43cd-56be-8c9f-5168421054af",
+      "name": "Log Final Status",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        5320,
+        80
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "http://tracking-api:8081/logs",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ level: 'info', event: 'final_product_status', product_id: $json.product_id, message: 'Product ' + $json.product_id + ' status ' + $json.overall_status, details: $json }) }}",
+        "options": {
+          "timeout": 120000
+        }
+      }
+    },
+    {
+      "id": "0fbfd3eb-8f3d-5540-801b-b1fa77134dc8",
+      "name": "Drive",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        1000,
+        220
+      ],
+      "parameters": {
+        "content": "## Google Drive (public folder)\nDry-run lists/downloads via the shared folder link.\nFolder ID comes from `GOOGLE_DRIVE_FOLDER_ID`.\nDoes **not** use n8n Google Drive OAuth for media (that path returned SERVICE_DISABLED 403 even when OAuth showed connected).",
+        "width": 320,
+        "height": 240,
+        "color": 1
+      }
+    },
+    {
+      "id": "1fc1530b-bd3b-59da-a4b3-0851ae008867",
+      "name": "Safety",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        3880,
+        -360
+      ],
+      "parameters": {
+        "content": "## DRY_RUN\nSocial publish nodes are not called until you set `DRY_RUN=false`.",
+        "width": 280,
+        "height": 140,
+        "color": 3
+      }
+    }
+  ],
+  "connections": {
+    "Every Day 9AM Kolkata": {
+      "main": [
+        [
+          {
+            "node": "Load Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Run Manually": {
+      "main": [
+        [
+          {
+            "node": "Load Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "When Called by Another Workflow": {
+      "main": [
+        [
+          {
+            "node": "Load Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Config": {
+      "main": [
+        [
+          {
+            "node": "Log Daily Start",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log Daily Start": {
+      "main": [
+        [
+          {
+            "node": "Drive Folder Configured?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Drive Folder Configured?": {
+      "main": [
+        [
+          {
+            "node": "List Google Drive Folder",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Stop Missing Folder ID",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "List Google Drive Folder": {
+      "main": [
+        [
+          {
+            "node": "Normalize Drive List",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Drive List": {
+      "main": [
+        [
+          {
+            "node": "Select Next Product",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Select Next Product": {
+      "main": [
+        [
+          {
+            "node": "Product Found?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Product Found?": {
+      "main": [
+        [
+          {
+            "node": "Mark Processing",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Log No Product",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log No Product": {
+      "main": [
+        [
+          {
+            "node": "Idle",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mark Processing": {
+      "main": [
+        [
+          {
+            "node": "Pick Vision File",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Pick Vision File": {
+      "main": [
+        [
+          {
+            "node": "Download Drive Media",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Download Drive Media": {
+      "main": [
+        [
+          {
+            "node": "Save Media to Disk",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save Media to Disk": {
+      "main": [
+        [
+          {
+            "node": "Prepare Vision Still",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Vision Still": {
+      "main": [
+        [
+          {
+            "node": "Build AI Job",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build AI Job": {
+      "main": [
+        [
+          {
+            "node": "Generate AI Content",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate AI Content": {
+      "main": [
+        [
+          {
+            "node": "Build Preview Payload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Preview Payload": {
+      "main": [
+        [
+          {
+            "node": "Save Preview",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save Preview": {
+      "main": [
+        [
+          {
+            "node": "DRY RUN?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "DRY RUN?": {
+      "main": [
+        [
+          {
+            "node": "Build Dry Run Log",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Publish Instagram",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Dry Run Log": {
+      "main": [
+        [
+          {
+            "node": "Log Dry Run Preview",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log Dry Run Preview": {
+      "main": [
+        [
+          {
+            "node": "Finalize Dry Run",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Publish Instagram": {
+      "main": [
+        [
+          {
+            "node": "Publish Facebook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Publish Facebook": {
+      "main": [
+        [
+          {
+            "node": "Publish Pinterest",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Publish Pinterest": {
+      "main": [
+        [
+          {
+            "node": "Publish YouTube",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Publish YouTube": {
+      "main": [
+        [
+          {
+            "node": "Finalize Product",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Finalize Product": {
+      "main": [
+        [
+          {
+            "node": "Log Final Status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Asia/Kolkata",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false,
+    "errorWorkflow": "3dprErrorLog008"
+  },
+  "pinData": {},
+  "versionId": "ec128a1f-ffc8-535d-a9a7-cbcdbda76522",
+  "meta": {
+    "templateCredsSetupCompleted": false
+  },
+  "tags": []
+}

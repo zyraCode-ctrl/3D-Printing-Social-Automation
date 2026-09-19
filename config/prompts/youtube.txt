@@ -1,0 +1,10 @@
+YouTube Shorts only (never long-form):
+- This automation publishes YouTube Shorts only. Do not write long-form video copy.
+- Title: short, attention-grabbing, under ~70 characters. Name what is visible. No clickbait lies.
+- Description: concise (2–4 short lines). Describe what is shown. Natural 3D printing / model-making context. End with a light CTA.
+- Always include the hashtag #Shorts in the hashtags list (and it may appear once in the description).
+- Hashtags: 3–6 relevant lowercase hashtags (including #shorts).
+- Tags/keywords: 5–10 YouTube tag phrases (not hashtags) for search.
+- Use everyday international English for USA, Canada, UK, and Australia.
+- Never invent specifications, materials, sizes, print settings, prices, shipping, or URLs.
+- Only describe what is visible in the product media.

@@ -1,0 +1,332 @@
+{
+  "id": "3dprFacebook005",
+  "name": "05 Facebook Publisher",
+  "active": false,
+  "isArchived": false,
+  "nodes": [
+    {
+      "id": "d35a3bbf-bbcc-5dc7-aa6d-6e39bbceb354",
+      "name": "Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -360,
+        -240
+      ],
+      "parameters": {
+        "content": "## Facebook Page (official Meta Graph API)\n\nPublishes to a Page:\n- Images: `POST /{page-id}/photos`\n- Videos: `POST /{page-id}/videos`\n\nRequires:\n- n8n credential **Facebook Graph account** (Page access token with `pages_manage_posts`)\n- `FACEBOOK_PAGE_ID` and `META_GRAPH_VERSION` in `.env`\n\n`DRY_RUN=true` stops at Duplicate Check \u2014 nothing is posted.\n",
+        "width": 360,
+        "height": 320,
+        "color": 4
+      }
+    },
+    {
+      "id": "dc08b0ae-0f01-55b5-94e8-334a24a95d39",
+      "name": "When Called by Another Workflow",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {
+        "inputSource": "passthrough"
+      }
+    },
+    {
+      "id": "51246915-c776-5fdb-a304-9e37d19c23ba",
+      "name": "Duplicate Check",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        240,
+        0
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "={{ 'http://tracking-api:8081/products/' + $json.product_id + '/can-publish?platform=facebook' }}",
+        "options": {
+          "timeout": 60000
+        }
+      }
+    },
+    {
+      "id": "fd304afb-2c18-5784-bc5e-ff20d20dbb06",
+      "name": "Allowed to Publish?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        500,
+        0
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "3e4726eb-e9ae-5c17-9226-e7f40c106692",
+              "leftValue": "={{ $json.allowed }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "134a18bf-ae93-5728-8bfb-1b8aa877ffdf",
+      "name": "Blocked Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        760,
+        220
+      ],
+      "parameters": {
+        "jsCode": "const job = $('When Called by Another Workflow').first().json;\nconst check = $json;\nreturn [{ json: {\n  product_id: job.product_id,\n  platform: 'facebook',\n  status: check.dry_run ? 'dry_run_skipped' : (check.status === 'published' ? 'published' : 'skipped'),\n  skipped: true,\n  reason: check.reason,\n  post_id: check.post_id || null\n} }];\n"
+      }
+    },
+    {
+      "id": "977f4b3b-fe5c-569a-992b-a00598d77d75",
+      "name": "Load Config",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        760,
+        -120
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "http://tracking-api:8081/config",
+        "options": {
+          "timeout": 60000
+        }
+      }
+    },
+    {
+      "id": "a61e0f51-ceb3-5940-a36b-db473a363220",
+      "name": "Load Preview",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        980,
+        -120
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "={{ 'http://tracking-api:8081/previews/' + $('When Called by Another Workflow').first().json.product_id }}",
+        "options": {
+          "timeout": 60000
+        }
+      }
+    },
+    {
+      "id": "bd0487b5-cc65-5b20-b455-1f2af4d6034b",
+      "name": "Prepare Facebook Job",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1220,
+        -120
+      ],
+      "parameters": {
+        "jsCode": "const job = $('When Called by Another Workflow').first().json;\nconst config = $('Load Config').first().json;\nconst preview = $json;\nconst content = (preview && preview.content) || job.content || {};\nconst fb = content.facebook || {};\nif (!config.facebook_page_id) {\n  throw new Error('FACEBOOK_PAGE_ID is missing in .env / tracking config.');\n}\nconst message = [fb.caption, (fb.hashtags || []).join(' '), fb.cta].filter(Boolean).join('\\n\\n');\nconst driveId = preview.drive_file_id || job.drive_file_id || null;\nconst publicUrl = job.public_media_url\n  || (driveId ? ('https://drive.google.com/uc?export=download&id=' + driveId) : null);\nif (!publicUrl) {\n  throw new Error('No public_media_url / drive_file_id available for Facebook Graph publishing.');\n}\nconst isVideo = String(preview.media_type || job.media_type || '') === 'video'\n  || Boolean(job.video_file && !job.image_file)\n  || String(preview.media_type || '') === 'both';\nconst version = config.meta_graph_version || 'v22.0';\nconst pageId = config.facebook_page_id;\nconst edge = isVideo ? 'videos' : 'photos';\nconst body = isVideo\n  ? { description: message, file_url: publicUrl }\n  : { caption: message, url: publicUrl };\nreturn [{ json: {\n  product_id: job.product_id,\n  platform: 'facebook',\n  config,\n  preview,\n  content,\n  public_media_url: publicUrl,\n  drive_file_id: driveId,\n  publish_url: 'https://graph.facebook.com/' + version + '/' + pageId + '/' + edge,\n  publish_body: body\n} }];\n"
+      }
+    },
+    {
+      "id": "f9a51183-45ea-5d3f-9d4a-17e7d14b2c93",
+      "name": "Publish Official API",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        1480,
+        -120
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.publish_url }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "facebookGraphApi",
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ JSON.stringify($json.publish_body) }}",
+        "options": {
+          "timeout": 180000
+        }
+      },
+      "credentials": {
+        "facebookGraphApi": {
+          "id": "facebookGraphApi",
+          "name": "Facebook Graph account"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "3f8b1198-036b-5ff2-85ea-a71d433f33b5",
+      "name": "Interpret Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1720,
+        -120
+      ],
+      "parameters": {
+        "jsCode": "const prepared = $('Prepare Facebook Job').first().json;\nconst response = $json;\nif (response.error) {\n  return [{ json: {\n    product_id: prepared.product_id,\n    platform: 'facebook',\n    status: 'failed',\n    error_message: response.error.message || JSON.stringify(response.error)\n  } }];\n}\nconst postId = response.id || response.post_id || null;\nif (!postId) {\n  return [{ json: {\n    product_id: prepared.product_id,\n    platform: 'facebook',\n    status: 'failed',\n    error_message: 'No Facebook post id in response: ' + JSON.stringify(response).slice(0, 400)\n  } }];\n}\nreturn [{ json: {\n  product_id: prepared.product_id,\n  platform: 'facebook',\n  status: 'published',\n  post_id: String(postId)\n} }];\n"
+      }
+    },
+    {
+      "id": "0c022beb-1004-5cb3-a843-b2c54b75c5a6",
+      "name": "Store Platform Result",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        1960,
+        40
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ 'http://tracking-api:8081/products/' + $json.product_id + '/platform-result' }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ platform: $json.platform, status: $json.status === 'dry_run_skipped' ? 'pending' : ($json.status === 'skipped' ? 'skipped' : $json.status), post_id: $json.post_id || null, error_message: $json.error_message || $json.reason || null }) }}",
+        "options": {
+          "timeout": 120000
+        }
+      }
+    }
+  ],
+  "connections": {
+    "When Called by Another Workflow": {
+      "main": [
+        [
+          {
+            "node": "Duplicate Check",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Duplicate Check": {
+      "main": [
+        [
+          {
+            "node": "Allowed to Publish?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Allowed to Publish?": {
+      "main": [
+        [
+          {
+            "node": "Load Config",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Blocked Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Config": {
+      "main": [
+        [
+          {
+            "node": "Load Preview",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Preview": {
+      "main": [
+        [
+          {
+            "node": "Prepare Facebook Job",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Facebook Job": {
+      "main": [
+        [
+          {
+            "node": "Publish Official API",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Publish Official API": {
+      "main": [
+        [
+          {
+            "node": "Interpret Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Interpret Result": {
+      "main": [
+        [
+          {
+            "node": "Store Platform Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Blocked Result": {
+      "main": [
+        [
+          {
+            "node": "Store Platform Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Asia/Kolkata",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false,
+    "errorWorkflow": "3dprErrorLog008"
+  },
+  "pinData": {},
+  "versionId": "4e30754f-d97e-5480-8e35-773c94d53b41",
+  "meta": {
+    "templateCredsSetupCompleted": false
+  },
+  "tags": []
+}

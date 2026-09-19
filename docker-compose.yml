@@ -1,0 +1,131 @@
+name: 3d-printing-social
+
+services:
+  tracking-api:
+    build:
+      context: .
+      dockerfile: services/tracking-api/Dockerfile
+    image: 3d-print-tracking-api:local
+    container_name: tracking-api
+    restart: unless-stopped
+    environment:
+      APP_ROOT: /data
+      DB_PATH: /data/db/tracking.sqlite
+      SCHEMA_PATH: /app/schema.sql
+      CONFIG_PATH: /data/config/settings.json
+      PROMPTS_DIR: /data/config/prompts
+      SAMPLES_DIR: /data/samples
+      MEDIA_DIR: /data/media
+      PREVIEWS_DIR: /data/previews
+      LOGS_DIR: /data/logs
+      TRACKING_API_PORT: 8081
+      DRY_RUN: ${DRY_RUN:-true}
+      USE_SAMPLE_MEDIA: ${USE_SAMPLE_MEDIA:-false}
+      DAILY_CRON: ${DAILY_CRON:-0 9 * * *}
+      GENERIC_TIMEZONE: ${GENERIC_TIMEZONE:-Asia/Kolkata}
+      TZ: ${TZ:-Asia/Kolkata}
+      GOOGLE_DRIVE_FOLDER_ID: ${GOOGLE_DRIVE_FOLDER_ID:-}
+      DRIVE_ACCESS_MODE: ${DRIVE_ACCESS_MODE:-public}
+      FACEBOOK_PAGE_ID: ${FACEBOOK_PAGE_ID:-}
+      INSTAGRAM_BUSINESS_ACCOUNT_ID: ${INSTAGRAM_BUSINESS_ACCOUNT_ID:-}
+      META_GRAPH_VERSION: ${META_GRAPH_VERSION:-v22.0}
+      PINTEREST_BOARD_ID: ${PINTEREST_BOARD_ID:-}
+      YOUTUBE_PRIVACY_STATUS: ${YOUTUBE_PRIVACY_STATUS:-private}
+      WEBSITE_URL: ${WEBSITE_URL:-}
+      INCLUDE_WEBSITE_URL: ${INCLUDE_WEBSITE_URL:-false}
+      AI_PROVIDER: ${AI_PROVIDER:-gemini}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-3.6-flash}
+      GEMINI_HOST: ${GEMINI_HOST:-https://generativelanguage.googleapis.com}
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434}
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-llava}
+      WEBHOOK_URL: ${WEBHOOK_URL:-http://localhost:5678/}
+    ports:
+      - "${TRACKING_API_PORT:-8081}:8081"
+    volumes:
+      - ./data:/data
+      - ./config:/data/config:ro
+      - ./samples:/data/samples:ro
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8081/health')"]
+      interval: 15s
+      timeout: 5s
+      retries: 8
+      start_period: 10s
+
+  n8n:
+    image: docker.n8n.io/n8nio/n8n:2.39.6
+    container_name: n8n
+    restart: unless-stopped
+    depends_on:
+      tracking-api:
+        condition: service_healthy
+    ports:
+      - "${N8N_PORT:-5678}:5678"
+    environment:
+      N8N_HOST: ${N8N_HOST:-localhost}
+      N8N_PORT: 5678
+      N8N_PROTOCOL: ${N8N_PROTOCOL:-http}
+      WEBHOOK_URL: ${WEBHOOK_URL:-http://localhost:5678/}
+      GENERIC_TIMEZONE: ${GENERIC_TIMEZONE:-Asia/Kolkata}
+      TZ: ${TZ:-Asia/Kolkata}
+      N8N_ENCRYPTION_KEY: ${N8N_ENCRYPTION_KEY}
+      N8N_SECURE_COOKIE: ${N8N_SECURE_COOKIE:-false}
+      N8N_BLOCK_ENV_ACCESS_IN_NODE: ${N8N_BLOCK_ENV_ACCESS_IN_NODE:-false}
+      N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS: ${N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS:-true}
+      N8N_RESTRICT_FILE_ACCESS_TO: /data
+      N8N_DEFAULT_BINARY_DATA_MODE: filesystem
+      EXECUTIONS_DATA_PRUNE: "true"
+      EXECUTIONS_DATA_MAX_AGE: "168"
+      EXECUTIONS_DATA_SAVE_ON_ERROR: all
+      EXECUTIONS_DATA_SAVE_ON_SUCCESS: all
+      NODE_OPTIONS: --max-old-space-size=2048
+      DRY_RUN: ${DRY_RUN:-true}
+      USE_SAMPLE_MEDIA: ${USE_SAMPLE_MEDIA:-false}
+      DAILY_CRON: ${DAILY_CRON:-0 9 * * *}
+      GOOGLE_DRIVE_FOLDER_ID: ${GOOGLE_DRIVE_FOLDER_ID:-}
+      DRIVE_ACCESS_MODE: ${DRIVE_ACCESS_MODE:-public}
+      FACEBOOK_PAGE_ID: ${FACEBOOK_PAGE_ID:-}
+      INSTAGRAM_BUSINESS_ACCOUNT_ID: ${INSTAGRAM_BUSINESS_ACCOUNT_ID:-}
+      META_GRAPH_VERSION: ${META_GRAPH_VERSION:-v22.0}
+      PINTEREST_BOARD_ID: ${PINTEREST_BOARD_ID:-}
+      YOUTUBE_PRIVACY_STATUS: ${YOUTUBE_PRIVACY_STATUS:-private}
+      WEBSITE_URL: ${WEBSITE_URL:-}
+      INCLUDE_WEBSITE_URL: ${INCLUDE_WEBSITE_URL:-false}
+      AI_PROVIDER: ${AI_PROVIDER:-gemini}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-3.6-flash}
+      GEMINI_HOST: ${GEMINI_HOST:-https://generativelanguage.googleapis.com}
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434}
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-llava}
+      TRACKING_API_URL: http://tracking-api:8081
+    volumes:
+      - n8n_data:/home/node/.n8n
+      - ./data:/data
+      - ./config:/data/config:ro
+      - ./samples:/data/samples:ro
+      - ./n8n/workflows:/data/workflows:ro
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "node -e \"fetch('http://127.0.0.1:5678/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\"",
+        ]
+      interval: 20s
+      timeout: 10s
+      retries: 12
+      start_period: 40s
+
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ollama
+    restart: unless-stopped
+    profiles: ["local-ai"]
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    environment:
+      TZ: ${TZ:-Asia/Kolkata}
+
+volumes:
+  n8n_data:
+  ollama_data:

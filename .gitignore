@@ -1,0 +1,36 @@
+.env
+*.log
+.DS_Store
+Thumbs.db
+
+# Runtime data (keep folder placeholders)
+data/db/*.sqlite
+data/db/*.sqlite-*
+data/media/**
+!data/media/.gitkeep
+data/previews/**
+!data/previews/.gitkeep
+data/logs/**
+!data/logs/.gitkeep
+data/backups/**
+!data/backups/.gitkeep
+
+# Generated sample binaries can be recreated
+samples/*.jpg
+samples/*.jpeg
+samples/*.png
+samples/*.webp
+samples/*.mp4
+samples/*.mov
+!samples/.gitkeep
+!samples/README.md
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# n8n local dumps
+n8n/tmp/
+*.bak

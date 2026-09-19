@@ -1,0 +1,134 @@
+name: Daily social dry-run
+
+# Free GitHub-hosted runner. Keeps DRY_RUN=true — never publishes to social networks.
+# Schedule: 09:00 Asia/Kolkata = 03:30 UTC
+
+on:
+  schedule:
+    - cron: "30 3 * * *"
+  workflow_dispatch:
+  push:
+    branches: [master, main]
+    paths:
+      - ".github/workflows/daily-dry-run.yml"
+      - "docker-compose.yml"
+      - "services/**"
+      - "scripts/**"
+      - "n8n/workflows/**"
+      - "config/**"
+
+concurrency:
+  group: daily-dry-run
+  cancel-in-progress: true
+
+jobs:
+  dry-run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Restore tracking DB cache
+        uses: actions/cache@v4
+        with:
+          path: data/db
+          key: tracking-db-${{ github.run_id }}
+          restore-keys: |
+            tracking-db-
+
+      - name: Create runtime .env
+        env:
+          N8N_ENCRYPTION_KEY: ${{ secrets.N8N_ENCRYPTION_KEY }}
+          N8N_OWNER_PASSWORD: ${{ secrets.N8N_OWNER_PASSWORD }}
+          N8N_OWNER_EMAIL: ${{ secrets.N8N_OWNER_EMAIL }}
+          GOOGLE_DRIVE_FOLDER_ID: ${{ secrets.GOOGLE_DRIVE_FOLDER_ID }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "${N8N_ENCRYPTION_KEY}" ]; then
+            echo "Missing secret N8N_ENCRYPTION_KEY"
+            exit 1
+          fi
+          if [ -z "${N8N_OWNER_PASSWORD}" ]; then
+            echo "Missing secret N8N_OWNER_PASSWORD"
+            exit 1
+          fi
+          EMAIL="${N8N_OWNER_EMAIL:-admin@localhost.local}"
+          FOLDER="${GOOGLE_DRIVE_FOLDER_ID:-1MU6xHdcI18mCbDsp1IxAyA9YoDfeRQKD}"
+          cat > .env <<EOF
+          N8N_HOST=localhost
+          N8N_PORT=5678
+          N8N_PROTOCOL=http
+          WEBHOOK_URL=http://localhost:5678/
+          GENERIC_TIMEZONE=Asia/Kolkata
+          TZ=Asia/Kolkata
+          N8N_ENCRYPTION_KEY=${N8N_ENCRYPTION_KEY}
+          N8N_SECURE_COOKIE=false
+          N8N_BLOCK_ENV_ACCESS_IN_NODE=false
+          N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS=true
+          N8N_RESTRICT_FILE_ACCESS_TO=/data
+          N8N_OWNER_EMAIL=${EMAIL}
+          N8N_OWNER_FIRST_NAME=Store
+          N8N_OWNER_LAST_NAME=Admin
+          N8N_OWNER_PASSWORD=${N8N_OWNER_PASSWORD}
+          DRY_RUN=true
+          USE_SAMPLE_MEDIA=false
+          DAILY_CRON=0 9 * * *
+          GOOGLE_DRIVE_FOLDER_ID=${FOLDER}
+          DRIVE_ACCESS_MODE=public
+          META_GRAPH_VERSION=v22.0
+          YOUTUBE_PRIVACY_STATUS=private
+          INCLUDE_WEBSITE_URL=false
+          AI_PROVIDER=gemini
+          GEMINI_MODEL=gemini-3.6-flash
+          GEMINI_HOST=https://generativelanguage.googleapis.com
+          GEMINI_API_KEY=${GEMINI_API_KEY}
+          TRACKING_API_PORT=8081
+          EOF
+          # Strip leading spaces from heredoc indentation
+          sed -i 's/^[[:space:]]*//' .env
+          mkdir -p data/db data/media data/previews data/logs data/backups
+          touch data/media/.gitkeep data/previews/.gitkeep data/logs/.gitkeep data/backups/.gitkeep data/db/.gitkeep
+
+      - name: Start stack (tracking-api + n8n)
+        run: docker compose up -d --build tracking-api n8n
+
+      - name: Wait for health
+        run: |
+          set -euo pipefail
+          for i in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:8081/health >/dev/null && curl -fsS http://127.0.0.1:5678/healthz >/dev/null; then
+              echo "Services healthy"
+              exit 0
+            fi
+            echo "Waiting ($i)..."
+            sleep 5
+          done
+          docker compose ps
+          docker compose logs --no-color --tail=80
+          exit 1
+
+      - name: Import n8n workflows + credentials
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: python3 scripts/import_workflows.py
+
+      - name: Verify daily dry-run
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          N8N_OWNER_EMAIL: ${{ secrets.N8N_OWNER_EMAIL }}
+          N8N_OWNER_PASSWORD: ${{ secrets.N8N_OWNER_PASSWORD }}
+          CI_RUN_E2E: "true"
+        run: |
+          export N8N_OWNER_EMAIL="${N8N_OWNER_EMAIL:-admin@localhost.local}"
+          python3 scripts/ci_daily_run.py
+          python3 scripts/test_dry_run.py
+
+      - name: Dump logs on failure
+        if: failure()
+        run: docker compose logs --no-color --tail=200
+
+      - name: Stop stack
+        if: always()
+        run: docker compose down

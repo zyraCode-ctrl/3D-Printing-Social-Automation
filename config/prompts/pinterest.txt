@@ -1,0 +1,6 @@
+Pinterest:
+- Write an SEO-friendly pin title (clear, searchable, no clickbait).
+- Write an SEO description that states what is visible and who it may suit (desk setup, home office, gift idea only if accurate).
+- Provide 5–8 keyword phrases optimized for Pinterest search (not just hashtags). Prefer phrases like "3D printed desk accessory" when they match the media.
+- Provide 3–5 Pinterest-appropriate hashtags (lowercase is fine).
+- Image Pins only. Do not invent specs, prices, shipping, or URLs.

@@ -1,0 +1,426 @@
+{
+  "id": "3dprAiContent003",
+  "name": "03 AI Content Generator",
+  "active": false,
+  "isArchived": false,
+  "nodes": [
+    {
+      "id": "567409de-4781-5ae0-a383-d11f4df2fc86",
+      "name": "Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -420,
+        -280
+      ],
+      "parameters": {
+        "content": "## Vision AI (Gemini free tier)\nInspects the Google Drive product image (or a video frame).\n\n**Provider:** Google Gemini via n8n credential **Google Gemini account** (`googlePalmApi`).\n**Model:** `gemini-3.6-flash` (vision, Google AI Studio free tier), with free-tier fallbacks if Google returns high-demand/404.\n\nChatGPT Pro is not used. OpenAI API is not used. No mock AI.\nEnglish only. USA, Canada, UK, Australia. No invented specs. No website URL.\n\nTo add another provider later: extend **Build Provider Payload** and **Provider Switch**.",
+        "width": 400,
+        "height": 360,
+        "color": 5
+      }
+    },
+    {
+      "id": "a7bfb5e9-fdaa-5565-b6eb-b9ddbd3a985a",
+      "name": "When Called by Another Workflow",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {
+        "inputSource": "passthrough"
+      }
+    },
+    {
+      "id": "e1a21945-d565-51a0-8a7f-208cc9f3c48d",
+      "name": "Load Prompts",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        240,
+        0
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "http://tracking-api:8081/config",
+        "options": {
+          "timeout": 60000
+        }
+      }
+    },
+    {
+      "id": "df4326f8-f2a8-5500-b34b-1744dc25bd7a",
+      "name": "Build Provider Payload",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        500,
+        0
+      ],
+      "parameters": {
+        "jsCode": "const job = $('When Called by Another Workflow').first().json;\nconst config = $json;\nif (!job.vision_base64) {\n  throw new Error('No media was passed to the AI step. Download the Google Drive file first.');\n}\nconst provider = String(config.ai_provider || 'gemini').toLowerCase();\nconst prompts = config.prompts || {};\nconst platformGuide = [prompts.instagram, prompts.facebook, prompts.pinterest, prompts.youtube].filter(Boolean).join('\\n\\n');\nconst schema = [\n  'Analyze the attached product media. Write English only (international English for USA, Canada, UK, Australia).',\n  'Use natural terms like desk setup, home office, or workspace only when they fit what is visible.',\n  'Do not invent specifications, materials, sizes, prices, print times, shipping, stock, or brand names.',\n  'Do not include a website, URL, or link.',\n  'Each platform must have distinct wording and non-identical hashtag sets.',\n  'Instagram caption must include clean line breaks (use \\n\\n between short paragraphs), at most 1-2 emojis, 5-8 hashtags, and a strong non-spammy CTA.',\n  'Facebook caption should be a bit longer than Instagram, 4-6 hashtags (may share a few core tags but not the full identical list), and a natural CTA.',\n  'Pinterest needs SEO title, SEO description, 5-8 keyword phrases, and 3-5 hashtags.',\n  'YouTube in this project means YouTube Shorts only (never long-form). Provide a short attention-grabbing Shorts title (~70 chars max), a concise 2-4 line Shorts description, 3-6 lowercase hashtags including #shorts, and 5-10 YouTube tags/keywords.',\n  platformGuide,\n  'Return JSON only with this exact shape:',\n  '{',\n  '  \"vision_notes\": \"what is actually visible\",',\n  '  \"instagram\": {\"caption\": \"\", \"hashtags\": [], \"cta\": \"\"},',\n  '  \"facebook\": {\"caption\": \"\", \"hashtags\": [], \"cta\": \"\"},',\n  '  \"pinterest\": {\"title\": \"\", \"description\": \"\", \"keywords\": [], \"hashtags\": []},',\n  '  \"youtube\": {\"title\": \"\", \"description\": \"\", \"tags\": [], \"hashtags\": []}',\n  '}',\n  'Product ID ' + job.product_id + '. Filename ' + job.filename + '. Media type ' + job.media_type + '. If media is video, treat YouTube copy as a Short.'\n].join('\\n');\nconst systemPrompt = prompts.system || 'You are a social copywriter for a 3D printing store. Write natural international English for USA, Canada, UK, and Australia. Analyze only what you see. Never invent specs, prices, or shipping. Never add a URL. YouTube means YouTube Shorts only.';\nconst mime = job.vision_mime || 'image/jpeg';\nlet request_url = '';\nlet request_body = {};\nlet gemini_model = '';\nlet gemini_fallback_models = [];\nif (provider === 'gemini') {\n  const host = String(config.gemini_host || 'https://generativelanguage.googleapis.com').replace(/\\/$/, '');\n  gemini_model = config.gemini_model || 'gemini-3.6-flash';\n  gemini_fallback_models = ['gemini-flash-latest', 'gemini-3.8-flash', 'gemini-3.5-flash'].filter((m) => m !== gemini_model);\n  request_url = host + '/v1beta/models/' + gemini_model + ':generateContent';\n  request_body = {\n    systemInstruction: { parts: [{ text: systemPrompt }] },\n    contents: [{\n      role: 'user',\n      parts: [\n        { text: schema },\n        { inlineData: { mimeType: mime, data: job.vision_base64 } }\n      ]\n    }],\n    generationConfig: {\n      responseMimeType: 'application/json',\n      temperature: 0.7\n    }\n  };\n}\nconst payload = { ...job, config, ai_provider: provider, request_url, request_body, gemini_model, gemini_fallback_models, gemini_host: String(config.gemini_host || 'https://generativelanguage.googleapis.com').replace(/\\/$/, '') };\ndelete payload.vision_base64;\nreturn [{ json: payload }];\n"
+      }
+    },
+    {
+      "id": "e2277550-e8df-518e-8e4b-77dda0a5263b",
+      "name": "Provider Switch",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.4,
+      "position": [
+        760,
+        0
+      ],
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": false,
+                  "leftValue": "",
+                  "typeValidation": "loose",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "3d1eaad0-062a-5d18-bd7b-5bab88c373b7",
+                    "leftValue": "={{ $json.ai_provider }}",
+                    "rightValue": "gemini",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "gemini"
+            }
+          ]
+        },
+        "options": {
+          "fallbackOutput": "extra"
+        }
+      }
+    },
+    {
+      "id": "3510dd3e-2922-5a34-89e6-84a6faf0ea78",
+      "name": "Gemini Vision",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        1020,
+        -80
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.request_url }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googlePalmApi",
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ JSON.stringify($json.request_body) }}",
+        "options": {
+          "timeout": 120000
+        }
+      },
+      "credentials": {
+        "googlePalmApi": {
+          "id": "googlePalmApi",
+          "name": "Google Gemini account"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 4,
+      "waitBetweenTries": 5000,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "4bdff0bc-9f5e-577c-a0f6-11578adada83",
+      "name": "Evaluate Gemini Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1260,
+        -80
+      ],
+      "parameters": {
+        "jsCode": "const job = $('Build Provider Payload').first().json;\nconst raw = $json;\nconst hasCandidates = !!(raw && raw.candidates && raw.candidates[0]);\nif (hasCandidates) {\n  return [{ json: { ...job, gemini_raw: raw, need_fallback: false, gemini_model_used: job.gemini_model } }];\n}\nconst fallbacks = job.gemini_fallback_models || [];\nconst next = fallbacks[0];\nconst detail = (raw && raw.error && (raw.error.message || raw.error.status))\n  || (raw && raw.message)\n  || (raw && raw.description)\n  || JSON.stringify(raw || {}).slice(0, 300);\nif (!next) {\n  throw new Error('Gemini error: ' + detail);\n}\nreturn [{ json: {\n  ...job,\n  gemini_raw: raw,\n  need_fallback: true,\n  gemini_primary_error: String(detail).slice(0, 300),\n  gemini_model_used: next,\n  request_url: String(job.gemini_host || 'https://generativelanguage.googleapis.com').replace(/\\/$/, '') + '/v1beta/models/' + next + ':generateContent'\n} }];\n"
+      }
+    },
+    {
+      "id": "603bcf6e-8db5-5da5-84d7-bd504f58a01e",
+      "name": "Need Gemini Fallback?",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.4,
+      "position": [
+        1500,
+        -80
+      ],
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "loose",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "4d5667a2-2944-5655-9ec0-bf4d93e8640e",
+                    "leftValue": "={{ $json.need_fallback }}",
+                    "rightValue": true,
+                    "operator": {
+                      "type": "boolean",
+                      "operation": "true",
+                      "singleValue": true
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "yes"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "loose",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "16169337-6564-574d-a1a5-98dcc9ab5a94",
+                    "leftValue": "={{ $json.need_fallback }}",
+                    "rightValue": true,
+                    "operator": {
+                      "type": "boolean",
+                      "operation": "false",
+                      "singleValue": true
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "no"
+            }
+          ]
+        },
+        "options": {
+          "fallbackOutput": "extra"
+        }
+      }
+    },
+    {
+      "id": "3d00104f-10f8-5ff4-b059-bdb71321bcb2",
+      "name": "Gemini Vision Fallback",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        1740,
+        -200
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.request_url }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googlePalmApi",
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ JSON.stringify($json.request_body) }}",
+        "options": {
+          "timeout": 120000
+        }
+      },
+      "credentials": {
+        "googlePalmApi": {
+          "id": "googlePalmApi",
+          "name": "Google Gemini account"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "21f26737-4819-5a5d-963c-0d8f45bb2261",
+      "name": "Attach Fallback Raw",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1980,
+        -200
+      ],
+      "parameters": {
+        "jsCode": "const job = $('Evaluate Gemini Result').first().json;\nreturn [{ json: { ...job, gemini_raw: $json } }];\n"
+      }
+    },
+    {
+      "id": "2f218418-527c-5403-a3fd-3177c73b78ac",
+      "name": "Stop Unknown Provider",
+      "type": "n8n-nodes-base.stopAndError",
+      "typeVersion": 1,
+      "position": [
+        1020,
+        160
+      ],
+      "parameters": {
+        "errorType": "errorMessage",
+        "errorMessage": "Unknown AI provider. The production path uses Google Gemini free tier through n8n. OpenAI API is not used. Mock AI is not used."
+      }
+    },
+    {
+      "id": "b22d8405-006b-57bb-a94c-c5561881cdda",
+      "name": "Normalize AI JSON",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2220,
+        -80
+      ],
+      "parameters": {
+        "jsCode": "const job = $json;\nconst raw = job.gemini_raw || $json;\nif (raw.error) {\n  throw new Error('Gemini error: ' + (raw.error.message || JSON.stringify(raw.error)));\n}\nlet text = '';\nif (raw.candidates && raw.candidates[0] && raw.candidates[0].content && raw.candidates[0].content.parts) {\n  text = raw.candidates[0].content.parts.map((part) => part.text || '').join('');\n}\nif (!text && raw.text) text = raw.text;\nif (!text) {\n  throw new Error('Gemini returned no content. Open Credentials \u2192 Google Gemini account and paste a free Google AI Studio API key.');\n}\ntext = String(text).trim().replace(/^```json\\s*/i, '').replace(/```$/i, '').trim();\nlet content;\ntry { content = JSON.parse(text); }\ncatch (e) { throw new Error('Gemini did not return valid JSON: ' + e.message); }\nif (!content.instagram || !content.facebook || !content.pinterest || !content.youtube) {\n  throw new Error('Gemini JSON is missing a platform block. Refusing to invent copy.');\n}\nconst modelUsed = job.gemini_model_used || job.gemini_model || 'gemini-3.6-flash';\ndelete job.request_body;\ndelete job.vision_base64;\ndelete job.gemini_raw;\ndelete job.gemini_fallback_models;\ndelete job.need_fallback;\nreturn [{ json: { ...job, content, ai_provider_used: job.ai_provider || 'gemini', gemini_model_used: modelUsed, vision_notes: content.vision_notes } }];\n"
+      }
+    }
+  ],
+  "connections": {
+    "When Called by Another Workflow": {
+      "main": [
+        [
+          {
+            "node": "Load Prompts",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Prompts": {
+      "main": [
+        [
+          {
+            "node": "Build Provider Payload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Provider Payload": {
+      "main": [
+        [
+          {
+            "node": "Provider Switch",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Provider Switch": {
+      "main": [
+        [
+          {
+            "node": "Gemini Vision",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Stop Unknown Provider",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gemini Vision": {
+      "main": [
+        [
+          {
+            "node": "Evaluate Gemini Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Evaluate Gemini Result": {
+      "main": [
+        [
+          {
+            "node": "Need Gemini Fallback?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Need Gemini Fallback?": {
+      "main": [
+        [
+          {
+            "node": "Gemini Vision Fallback",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Normalize AI JSON",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gemini Vision Fallback": {
+      "main": [
+        [
+          {
+            "node": "Attach Fallback Raw",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Attach Fallback Raw": {
+      "main": [
+        [
+          {
+            "node": "Normalize AI JSON",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Asia/Kolkata",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false,
+    "errorWorkflow": "3dprErrorLog008"
+  },
+  "pinData": {},
+  "versionId": "7605fd67-566c-5695-8576-3c30dd9bebf6",
+  "meta": {
+    "templateCredsSetupCompleted": false
+  },
+  "tags": []
+}

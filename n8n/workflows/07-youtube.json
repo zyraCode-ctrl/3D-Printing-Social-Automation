@@ -1,0 +1,410 @@
+{
+  "id": "3dprYouTube0007",
+  "name": "07 YouTube Shorts Publisher",
+  "active": false,
+  "isArchived": false,
+  "nodes": [
+    {
+      "id": "6a8d065f-b418-5e82-80eb-ae83064a82f9",
+      "name": "Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -380,
+        -260
+      ],
+      "parameters": {
+        "content": "## YouTube Shorts only (official YouTube Data API v3)\n\nThis automation publishes **YouTube Shorts only** \u2014 never long-form videos.\n\n- Video products from Google Drive are treated as Shorts.\n- Image-only products are skipped.\n- Default privacy is **private** for testing (`YOUTUBE_PRIVACY_STATUS=private`).\n- Description/hashtags include `#Shorts` for Shorts discovery.\n- Attach **YouTube OAuth2 API** credentials before any live run.\n- `DRY_RUN=true` stops at Duplicate Check \u2014 nothing is uploaded.\n",
+        "width": 380,
+        "height": 360,
+        "color": 4
+      }
+    },
+    {
+      "id": "a9edb8c6-5f2d-5aee-8f0a-a01e08be3016",
+      "name": "When Called by Another Workflow",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {
+        "inputSource": "passthrough"
+      }
+    },
+    {
+      "id": "da4fa4e8-79b3-5ed6-a70e-cdf4cecc64db",
+      "name": "Duplicate Check",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        240,
+        0
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "={{ 'http://tracking-api:8081/products/' + $json.product_id + '/can-publish?platform=youtube' }}",
+        "options": {
+          "timeout": 60000
+        }
+      }
+    },
+    {
+      "id": "dd746a9f-ac35-5aee-93ac-5c6f1437a59d",
+      "name": "Allowed to Publish?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        500,
+        0
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "75e46daa-3c83-5716-8fa7-970d450dcaf7",
+              "leftValue": "={{ $json.allowed }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "b6d1cb68-4d76-5ba9-9653-973a35172c9d",
+      "name": "Blocked Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        760,
+        220
+      ],
+      "parameters": {
+        "jsCode": "const job = $('When Called by Another Workflow').first().json;\nconst check = $json;\nreturn [{ json: {\n  product_id: job.product_id,\n  platform: 'youtube',\n  status: check.dry_run ? 'dry_run_skipped' : (check.status === 'published' ? 'published' : 'skipped'),\n  skipped: true,\n  reason: check.reason,\n  post_id: check.post_id || null\n} }];\n"
+      }
+    },
+    {
+      "id": "dc942339-0a51-5f38-8599-679f37db9d47",
+      "name": "Load Config",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        760,
+        -120
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "http://tracking-api:8081/config",
+        "options": {
+          "timeout": 60000
+        }
+      }
+    },
+    {
+      "id": "af1814b7-685d-5ea0-919b-5443f58aa0fb",
+      "name": "Load Preview",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        980,
+        -120
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "={{ 'http://tracking-api:8081/previews/' + $('When Called by Another Workflow').first().json.product_id }}",
+        "options": {
+          "timeout": 60000
+        }
+      }
+    },
+    {
+      "id": "624ea482-5aa9-5552-a5a1-01057515bb26",
+      "name": "Prepare Shorts Job",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1220,
+        -120
+      ],
+      "parameters": {
+        "jsCode": "const job = $('When Called by Another Workflow').first().json;\nconst config = $('Load Config').first().json;\nconst preview = $json;\nconst mediaType = String(preview.media_type || job.media_type || '');\nif (mediaType === 'image') {\n  return [{ json: {\n    product_id: job.product_id,\n    platform: 'youtube',\n    status: 'skipped',\n    skipped: true,\n    reason: 'YouTube Shorts require video media. Image-only products are skipped.',\n    skip_upload: true\n  } }];\n}\nconst content = (preview && preview.content) || job.content || {};\nconst yt = content.youtube || {};\nlet title = String(yt.title || '').trim();\nif (title.length > 70) title = title.slice(0, 67).trim() + '...';\nlet description = String(yt.description || '').trim();\nconst hashtags = Array.isArray(yt.hashtags) ? yt.hashtags.map(String) : [];\nconst tags = Array.isArray(yt.tags) ? yt.tags.map(String) : [];\nconst lowerTags = hashtags.map((h) => h.toLowerCase());\nif (!lowerTags.some((h) => h.replace(/^#/, '') === 'shorts')) {\n  hashtags.push('#shorts');\n}\nif (!/\\b#?shorts\\b/i.test(description)) {\n  description = (description ? description + '\\n\\n' : '') + '#Shorts';\n}\nconst tagLine = hashtags.join(' ');\nif (tagLine && !description.includes(tagLine)) {\n  description = description + '\\n' + tagLine;\n}\nreturn [{ json: {\n  product_id: job.product_id,\n  platform: 'youtube',\n  skip_upload: false,\n  shorts: true,\n  title,\n  description,\n  tags,\n  hashtags,\n  privacyStatus: config.youtube_privacy_status || 'private',\n  filename: preview.filename || job.filename || null,\n  drive_file_id: preview.drive_file_id || job.drive_file_id || null,\n  local_path: preview.local_path || job.local_path || null,\n  content\n} }];\n"
+      }
+    },
+    {
+      "id": "7cd25e4d-306a-5270-af40-d6a424908cc4",
+      "name": "Upload Short?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        1460,
+        -120
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "c5aab7de-b8bb-52d5-bcc1-e9fd142c8b36",
+              "leftValue": "={{ !$json.skip_upload }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "91cae1ab-bd6a-5899-819f-292f108a4d88",
+      "name": "Read Short Binary",
+      "type": "n8n-nodes-base.readBinaryFile",
+      "typeVersion": 1,
+      "position": [
+        1700,
+        -200
+      ],
+      "parameters": {
+        "filePath": "={{ $json.local_path }}",
+        "dataPropertyName": "data"
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "d56b4ddd-0ff4-5c4e-90f3-59f700313e37",
+      "name": "Upload YouTube Short",
+      "type": "n8n-nodes-base.youTube",
+      "typeVersion": 1,
+      "position": [
+        1940,
+        -200
+      ],
+      "parameters": {
+        "resource": "video",
+        "operation": "upload",
+        "title": "={{ $('Prepare Shorts Job').item.json.title }}",
+        "regionCode": "US",
+        "categoryId": "28",
+        "binaryProperty": "data",
+        "options": {
+          "description": "={{ $('Prepare Shorts Job').item.json.description }}",
+          "privacyStatus": "={{ $('Prepare Shorts Job').item.json.privacyStatus || 'private' }}",
+          "tags": "={{ ($('Prepare Shorts Job').item.json.tags || []).join(',') }}"
+        }
+      },
+      "credentials": {
+        "youTubeOAuth2Api": {
+          "id": "youTubeOAuth2Api",
+          "name": "YouTube account"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "615e8ece-5031-51e6-b648-5b68f2cc1e01",
+      "name": "Interpret Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2180,
+        -120
+      ],
+      "parameters": {
+        "jsCode": "const prepared = $('Prepare Shorts Job').first().json;\nif (prepared.skip_upload) {\n  return [{ json: {\n    product_id: prepared.product_id,\n    platform: 'youtube',\n    status: 'skipped',\n    skipped: true,\n    reason: prepared.reason || 'YouTube Shorts require video media'\n  } }];\n}\nif (!prepared.local_path) {\n  return [{ json: {\n    product_id: prepared.product_id,\n    platform: 'youtube',\n    status: 'failed',\n    error_message: 'Missing local_path for Shorts video binary (product media from Drive).'\n  } }];\n}\nconst response = $json;\nconst postId = response.id || response.videoId || (response.snippet ? response.id : null);\nif (response.error || !postId) {\n  return [{ json: {\n    product_id: prepared.product_id,\n    platform: 'youtube',\n    status: 'failed',\n    error_message: (response.error && response.error.message) || response.message || JSON.stringify(response).slice(0, 500)\n  } }];\n}\nreturn [{ json: {\n  product_id: prepared.product_id,\n  platform: 'youtube',\n  status: 'published',\n  post_id: String(postId),\n  shorts: true\n} }];\n"
+      }
+    },
+    {
+      "id": "2378f599-467c-512c-9bf7-4587043282b3",
+      "name": "Store Platform Result",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        2420,
+        40
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ 'http://tracking-api:8081/products/' + $json.product_id + '/platform-result' }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ platform: 'youtube', status: $json.status === 'dry_run_skipped' ? 'pending' : $json.status, post_id: $json.post_id || null, error_message: $json.error_message || $json.reason || null }) }}",
+        "options": {
+          "timeout": 120000
+        }
+      }
+    }
+  ],
+  "connections": {
+    "When Called by Another Workflow": {
+      "main": [
+        [
+          {
+            "node": "Duplicate Check",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Duplicate Check": {
+      "main": [
+        [
+          {
+            "node": "Allowed to Publish?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Allowed to Publish?": {
+      "main": [
+        [
+          {
+            "node": "Load Config",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Blocked Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Config": {
+      "main": [
+        [
+          {
+            "node": "Load Preview",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Preview": {
+      "main": [
+        [
+          {
+            "node": "Prepare Shorts Job",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Shorts Job": {
+      "main": [
+        [
+          {
+            "node": "Upload Short?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Upload Short?": {
+      "main": [
+        [
+          {
+            "node": "Read Short Binary",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Interpret Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Short Binary": {
+      "main": [
+        [
+          {
+            "node": "Upload YouTube Short",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Upload YouTube Short": {
+      "main": [
+        [
+          {
+            "node": "Interpret Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Interpret Result": {
+      "main": [
+        [
+          {
+            "node": "Store Platform Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Blocked Result": {
+      "main": [
+        [
+          {
+            "node": "Store Platform Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Asia/Kolkata",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false,
+    "errorWorkflow": "3dprErrorLog008"
+  },
+  "pinData": {},
+  "versionId": "ae13f6c4-c878-5900-9f33-e7046c62b63f",
+  "meta": {
+    "templateCredsSetupCompleted": false
+  },
+  "tags": []
+}

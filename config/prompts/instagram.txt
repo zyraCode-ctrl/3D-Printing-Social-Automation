@@ -1,0 +1,7 @@
+Instagram:
+- Write a natural caption with clean line breaks (short paragraphs separated by blank lines).
+- Keep a warm human tone about what is visible (desk setup / home office / workspace only if it fits the image).
+- Use at most 1–2 relevant emojis; never spam emojis.
+- Provide 5–8 hashtags. Include a few shared 3D-printing discovery tags, but the full Instagram set must NOT be identical to Facebook.
+- CTA should be strong, specific, and non-spammy (invite a comment or preference). Do not hard-sell.
+- Do not invent specs, prices, shipping, or URLs.
