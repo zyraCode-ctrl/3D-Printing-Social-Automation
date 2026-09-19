@@ -34,3 +34,7 @@ venv/
 # n8n local dumps
 n8n/tmp/
 *.bak
+
+# Scraped Drive HTML probes (may embed browser keys)
+scripts/_drive_probe*.html
+
