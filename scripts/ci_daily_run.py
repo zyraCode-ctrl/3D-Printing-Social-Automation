@@ -212,11 +212,18 @@ def main() -> int:
             print("WARN: daily publisher id not found; stack + import verified")
             return 0
         print(f"Triggering daily publisher {daily_id} (DRY_RUN)...")
-        # n8n 2.x manual run endpoints vary; try several.
+        # n8n 2.x requires triggerToStartFrom (or destinationNode) for manual runs.
         attempts = [
-            ("POST", f"/rest/workflows/{daily_id}/run", {}),
-            ("POST", f"/rest/workflows/{daily_id}/execute", {}),
-            ("POST", "/rest/workflows/run", {"workflowId": daily_id}),
+            (
+                "POST",
+                f"/rest/workflows/{daily_id}/run",
+                {"triggerToStartFrom": {"name": "Run Manually"}},
+            ),
+            (
+                "POST",
+                f"/rest/workflows/{daily_id}/run",
+                {"destinationNode": "Finalize Dry Run"},
+            ),
         ]
         triggered = False
         exec_id = None
@@ -226,12 +233,18 @@ def main() -> int:
             if st in {200, 201}:
                 triggered = True
                 if isinstance(body, dict):
-                    exec_id = body.get("id") or body.get("executionId") or (body.get("data") or {}).get("executionId")
+                    data = body.get("data") if isinstance(body.get("data"), dict) else body
+                    exec_id = (
+                        (data or {}).get("executionId")
+                        or (data or {}).get("id")
+                        or body.get("executionId")
+                        or body.get("id")
+                    )
                 break
             print(str(body)[:400])
         if not triggered:
-            print("WARN: could not auto-trigger daily workflow; stack + import verified")
-            return 0
+            print("FAIL: could not auto-trigger daily workflow with Gemini key present")
+            return 1
         # Poll executions briefly
         deadline = time.time() + 480
         while time.time() < deadline:
