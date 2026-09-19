@@ -136,6 +136,10 @@ def ensure_credentials(client: N8n, env: dict[str, str] | None = None) -> dict[s
         },
     ]
     mapping: dict[str, dict[str, str]] = {}
+    yt_client_id = (env.get("YOUTUBE_OAUTH_CLIENT_ID") or os.environ.get("YOUTUBE_OAUTH_CLIENT_ID") or "").strip()
+    yt_client_secret = (
+        env.get("YOUTUBE_OAUTH_CLIENT_SECRET") or os.environ.get("YOUTUBE_OAUTH_CLIENT_SECRET") or ""
+    ).strip()
     for spec in specs:
         current = existing.get(spec["name"])
         if current and current.get("id"):
@@ -166,6 +170,23 @@ def ensure_credentials(client: N8n, env: dict[str, str] | None = None) -> dict[s
                     if st not in {200, 201}:
                         st, body = client.json("PUT", f"/rest/credentials/{current['id']}", payload)
                     print(f"Gemini credential update: {st}")
+            if spec["type"] == "youTubeOAuth2Api" and (yt_client_id or yt_client_secret):
+                st, detail = client.json("GET", f"/rest/credentials/{current['id']}?includeData=true")
+                cred = detail.get("data", detail) if isinstance(detail, dict) else detail
+                data = dict((cred or {}).get("data") or {})
+                changed = False
+                if yt_client_id and data.get("clientId") != yt_client_id:
+                    data["clientId"] = yt_client_id
+                    changed = True
+                if yt_client_secret and data.get("clientSecret") != yt_client_secret:
+                    data["clientSecret"] = yt_client_secret
+                    changed = True
+                if changed:
+                    payload = {"name": spec["name"], "type": "youTubeOAuth2Api", "data": data}
+                    st, body = client.json("PATCH", f"/rest/credentials/{current['id']}", payload)
+                    if st not in {200, 201}:
+                        st, body = client.json("PUT", f"/rest/credentials/{current['id']}", payload)
+                    print(f"YouTube OAuth client fields update: {st} (Sign in with Google still required in n8n UI)")
             continue
         create_spec = dict(spec)
         if create_spec["type"] == "googlePalmApi":
@@ -175,6 +196,11 @@ def ensure_credentials(client: N8n, env: dict[str, str] | None = None) -> dict[s
                     "host": "https://generativelanguage.googleapis.com",
                     "apiKey": gemini_key,
                 }
+        if create_spec["type"] == "youTubeOAuth2Api" and (yt_client_id or yt_client_secret):
+            create_spec["data"] = {
+                "clientId": yt_client_id,
+                "clientSecret": yt_client_secret,
+            }
         status, body = client.json("POST", "/rest/credentials", create_spec)
         print(f"Create credential {create_spec['name']}: {status}")
         if status in {200, 201} and isinstance(body, dict):
@@ -290,6 +316,7 @@ def main() -> None:
         "06-pinterest.json",
         "07-youtube.json",
         "09-meta-auth-probe.json",
+        "10-youtube-auth-probe.json",
         "01-daily-publisher.json",
         "02-admin-control.json",
     ]

@@ -44,6 +44,8 @@ jobs:
           N8N_OWNER_EMAIL: ${{ secrets.N8N_OWNER_EMAIL }}
           GOOGLE_DRIVE_FOLDER_ID: ${{ secrets.GOOGLE_DRIVE_FOLDER_ID }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          YOUTUBE_OAUTH_CLIENT_ID: ${{ secrets.YOUTUBE_OAUTH_CLIENT_ID }}
+          YOUTUBE_OAUTH_CLIENT_SECRET: ${{ secrets.YOUTUBE_OAUTH_CLIENT_SECRET }}
         run: |
           set -euo pipefail
           if [ -z "${N8N_ENCRYPTION_KEY}" ]; then
@@ -79,6 +81,8 @@ jobs:
           DRIVE_ACCESS_MODE=public
           META_GRAPH_VERSION=v22.0
           YOUTUBE_PRIVACY_STATUS=private
+          YOUTUBE_OAUTH_CLIENT_ID=${YOUTUBE_OAUTH_CLIENT_ID}
+          YOUTUBE_OAUTH_CLIENT_SECRET=${YOUTUBE_OAUTH_CLIENT_SECRET}
           INCLUDE_WEBSITE_URL=false
           AI_PROVIDER=gemini
           GEMINI_MODEL=gemini-3.6-flash
@@ -113,6 +117,8 @@ jobs:
       - name: Import n8n workflows + credentials
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          YOUTUBE_OAUTH_CLIENT_ID: ${{ secrets.YOUTUBE_OAUTH_CLIENT_ID }}
+          YOUTUBE_OAUTH_CLIENT_SECRET: ${{ secrets.YOUTUBE_OAUTH_CLIENT_SECRET }}
         run: python3 scripts/import_workflows.py
 
       - name: Verify daily dry-run
@@ -125,6 +131,7 @@ jobs:
           export N8N_OWNER_EMAIL="${N8N_OWNER_EMAIL:-admin@localhost.local}"
           python3 scripts/ci_daily_run.py
           python3 scripts/test_dry_run.py
+          python3 scripts/test_youtube_readiness.py
 
       - name: Dump logs on failure
         if: failure()

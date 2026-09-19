@@ -1162,13 +1162,24 @@ if (!prepared.local_path) {
   } }];
 }
 const response = $json;
+const errMsg = (response.error && response.error.message) || response.message || '';
 const postId = response.id || response.videoId || (response.snippet ? response.id : null);
 if (response.error || !postId) {
+  let message = errMsg || JSON.stringify(response).slice(0, 500);
+  const lower = String(message).toLowerCase();
+  if (lower.includes('invalid_grant') || lower.includes('unauthorized') || lower.includes('login required')) {
+    message = 'YouTube OAuth is missing or expired. Open n8n → Credentials → YouTube account → Sign in with Google. ' + message;
+  } else if (lower.includes('quota')) {
+    message = 'YouTube API quota exceeded. Retry tomorrow or request quota increase. ' + message;
+  } else if (lower.includes('youtubesignuprequired') || lower.includes('channel not found')) {
+    message = 'YouTube channel may be missing on this Google account. ' + message;
+  }
   return [{ json: {
     product_id: prepared.product_id,
     platform: 'youtube',
     status: 'failed',
-    error_message: (response.error && response.error.message) || response.message || JSON.stringify(response).slice(0, 500)
+    error_message: message,
+    shorts: true
   } }];
 }
 return [{ json: {
@@ -1684,6 +1695,110 @@ return [{ json: {
     return workflow("09 Meta Auth Probe", "3dprMetaAuthProbe09", nodes, pairs)
 
 
+def youtube_auth_probe_workflow() -> dict:
+    """Manual-only YouTube auth probe. Never uploads. Safe while DRY_RUN=true."""
+    note = """## YouTube Shorts Auth Probe
+
+Manual test only. Does **not** upload Shorts or change channel content.
+
+Uses YouTube Data API `channels.list?mine=true` (read-only) with **YouTube account** OAuth.
+
+1. Complete Google Cloud OAuth client + n8n **Sign in with Google** first.
+2. Run this workflow manually.
+3. Confirm a channel id/title is returned.
+4. Keep `DRY_RUN=true` — publisher upload stays blocked.
+"""
+    yt_cred = {"youTubeOAuth2Api": {"id": "youTubeOAuth2Api", "name": "YouTube account"}}
+    nodes = [
+        sticky("ytprobe", "Note", note, [-400, -220], 400, 340, 4),
+        node("ytprobe", "Run Manually", "n8n-nodes-base.manualTrigger", 1, {}, [0, 0]),
+        http_get("ytprobe", "Load Config", f"{TRACKING}/config", [240, 0]),
+        http_get("ytprobe", "YouTube Readiness", f"{TRACKING}/youtube/readiness", [480, 0]),
+        code(
+            "ytprobe",
+            "Guard Dry Run",
+            """
+const config = $('Load Config').first().json;
+const readiness = $json;
+if (config.dry_run !== true) {
+  throw new Error('Refusing YouTube probe while DRY_RUN is not true.');
+}
+if (String(config.youtube_format || readiness.youtube_format || '') !== 'shorts') {
+  throw new Error('youtube_format must be shorts');
+}
+return [{ json: {
+  dry_run: true,
+  readiness,
+  privacy: config.youtube_privacy_status || 'private',
+  note: 'About to call channels.list mine=true — read only, no upload.'
+} }];
+""",
+            [720, 0],
+        ),
+        node(
+            "ytprobe",
+            "List My Channel",
+            "n8n-nodes-base.httpRequest",
+            4.5,
+            {
+                "method": "GET",
+                "url": "https://www.googleapis.com/youtube/v3/channels",
+                "sendQuery": True,
+                "queryParameters": {
+                    "parameters": [
+                        {"name": "part", "value": "snippet,status"},
+                        {"name": "mine", "value": "true"},
+                    ]
+                },
+                "authentication": "predefinedCredentialType",
+                "nodeCredentialType": "youTubeOAuth2Api",
+                "options": {"timeout": 60000},
+            },
+            [980, 0],
+            credentials=yt_cred,
+            onError="continueRegularOutput",
+        ),
+        code(
+            "ytprobe",
+            "Summarize Probe",
+            """
+const readiness = $('YouTube Readiness').first().json;
+const raw = $json;
+const err = raw.error || raw.message || null;
+const items = Array.isArray(raw.items) ? raw.items : [];
+const channels = items.map((ch) => ({
+  id: ch.id,
+  title: (ch.snippet && ch.snippet.title) || null,
+  privacyStatus: (ch.status && ch.status.privacyStatus) || null,
+}));
+const oauthOk = !err && channels.length > 0;
+return [{ json: {
+  dry_run: true,
+  youtube_format: readiness.youtube_format || 'shorts',
+  publish_blocked_by_dry_run: true,
+  upload_attempted: false,
+  oauth_ok: oauthOk,
+  channels_found: channels,
+  error: err ? (typeof err === 'string' ? err : (err.message || JSON.stringify(err).slice(0, 400))) : null,
+  readiness,
+  next: oauthOk
+    ? 'OAuth works. Keep DRY_RUN=true. Do not upload until explicit approval.'
+    : 'OAuth not connected yet. Finish Google Cloud client + n8n Sign in with Google.',
+} }];
+""",
+            [1220, 0],
+        ),
+    ]
+    pairs = [
+        ("Run Manually", "Load Config"),
+        ("Load Config", "YouTube Readiness"),
+        ("YouTube Readiness", "Guard Dry Run"),
+        ("Guard Dry Run", "List My Channel"),
+        ("List My Channel", "Summarize Probe"),
+    ]
+    return workflow("10 YouTube Shorts Auth Probe", "3dprYtAuthProbe10", nodes, pairs)
+
+
 def main() -> None:
     OUT.mkdir(parents=True, exist_ok=True)
     docs = [
@@ -1694,6 +1809,7 @@ def main() -> None:
         ("06-pinterest.json", pinterest_workflow()),
         ("07-youtube.json", youtube_workflow()),
         ("09-meta-auth-probe.json", meta_auth_probe_workflow()),
+        ("10-youtube-auth-probe.json", youtube_auth_probe_workflow()),
         ("01-daily-publisher.json", daily_workflow()),
         ("02-admin-control.json", admin_workflow()),
     ]

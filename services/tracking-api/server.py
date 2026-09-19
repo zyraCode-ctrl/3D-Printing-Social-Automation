@@ -106,6 +106,8 @@ def runtime_config() -> dict[str, Any]:
         "meta_graph_version": os.environ.get("META_GRAPH_VERSION", "v22.0"),
         "pinterest_board_id": os.environ.get("PINTEREST_BOARD_ID", ""),
         "youtube_privacy_status": os.environ.get("YOUTUBE_PRIVACY_STATUS", settings.get("youtube_privacy_status", "private")),
+        "youtube_format": settings.get("youtube_format", "shorts"),
+        "youtube_oauth_redirect_uri": "http://localhost:5678/rest/oauth2-credential/callback",
         "website_url": os.environ.get("WEBSITE_URL", "") or settings.get("website_url", ""),
         "include_website_url": include_url or bool(settings.get("include_website_url")),
         "ai_provider": os.environ.get("AI_PROVIDER", ai.get("provider", "gemini")),
@@ -977,7 +979,7 @@ class Handler(BaseHTTPRequestHandler):
                             str(cfg.get("instagram_business_account_id") or "").strip()
                         ),
                         "pinterest_skipped_this_phase": True,
-                        "youtube_skipped_this_phase": True,
+                        "youtube_active_phase": True,
                         "publish_blocked_by_dry_run": bool(cfg["dry_run"]),
                         "next_steps": [
                             "Create a Meta Developer app (Business type)",
@@ -986,6 +988,43 @@ class Handler(BaseHTTPRequestHandler):
                             "Paste the token into n8n → Credentials → Facebook Graph account",
                             "Set FACEBOOK_PAGE_ID and INSTAGRAM_BUSINESS_ACCOUNT_ID in .env",
                             "Keep DRY_RUN=true until you explicitly approve a live post",
+                        ],
+                    },
+                )
+                return
+            if path == "/youtube/readiness":
+                cfg = runtime_config()
+                client_id_set = bool(str(os.environ.get("YOUTUBE_OAUTH_CLIENT_ID") or "").strip())
+                client_secret_set = bool(str(os.environ.get("YOUTUBE_OAUTH_CLIENT_SECRET") or "").strip())
+                self._send(
+                    200,
+                    {
+                        "ok": True,
+                        "dry_run": cfg["dry_run"],
+                        "youtube_format": cfg.get("youtube_format") or "shorts",
+                        "youtube_privacy_status": cfg.get("youtube_privacy_status") or "private",
+                        "publish_blocked_by_dry_run": bool(cfg["dry_run"]),
+                        "long_form_disabled": True,
+                        "oauth_redirect_uri": "http://localhost:5678/rest/oauth2-credential/callback",
+                        "required_scopes": [
+                            "https://www.googleapis.com/auth/youtube.upload",
+                            "https://www.googleapis.com/auth/youtube.readonly",
+                        ],
+                        "n8n_credential_name": "YouTube account",
+                        "n8n_credential_type": "youTubeOAuth2Api",
+                        "oauth_client_id_env_set": client_id_set,
+                        "oauth_client_secret_env_set": client_secret_set,
+                        "oauth_browser_consent_required": True,
+                        "upload_allowed": False,
+                        "note": "Auth is completed in n8n Sign in with Google. Never paste client secrets or tokens into chat. DRY_RUN blocks all uploads.",
+                        "next_browser_steps": [
+                            "Enable YouTube Data API v3 in Google Cloud",
+                            "Configure OAuth consent screen (External or Internal)",
+                            "Create OAuth client type Web application",
+                            "Add redirect URI http://localhost:5678/rest/oauth2-credential/callback",
+                            "Paste Client ID/Secret only into n8n → Credentials → YouTube account",
+                            "Click Sign in with Google (channel owner account)",
+                            "Keep DRY_RUN=true",
                         ],
                     },
                 )

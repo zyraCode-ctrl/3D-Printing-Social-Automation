@@ -18,11 +18,11 @@ Repo → **Settings → Secrets and variables → Actions**:
 | `N8N_OWNER_PASSWORD` | n8n owner password for headless import |
 | `N8N_OWNER_EMAIL` | Optional (default `admin@localhost.local`) |
 | `GOOGLE_DRIVE_FOLDER_ID` | Optional (defaults to the public folder already in `config/settings.json`) |
-| `GEMINI_API_KEY` | Optional but needed for full AI dry-run inside the daily job |
+| `GEMINI_API_KEY` | Free-tier Gemini key for AI dry-run |
+| `YOUTUBE_OAUTH_CLIENT_ID` | Optional — Google OAuth Web client ID (no tokens) |
+| `YOUTUBE_OAUTH_CLIENT_SECRET` | Optional — Google OAuth Web client secret (no tokens) |
 
-Keep social tokens **out of Actions** until you explicitly approve live publishing.
-
-Follow [INTEGRATION_PRIORITY.md](INTEGRATION_PRIORITY.md): YouTube Shorts OAuth is next; Pinterest then Meta after that.
+YouTube **Sign in with Google** (refresh token) cannot be completed headlessly in Actions. Store client id/secret only if you want import to prefill the n8n credential shell; browser consent stays on a local n8n session. Keep social **upload** blocked with `DRY_RUN=true`.
 
 ## What each run verifies
 

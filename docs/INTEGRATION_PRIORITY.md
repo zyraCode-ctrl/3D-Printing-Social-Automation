@@ -7,7 +7,7 @@ Keep `DRY_RUN=true` until the owner explicitly approves real publishing (step 9)
 | 1 | Google Drive | **Done** — public folder list/download working |
 | 2 | Gemini | **Done** — free-tier vision via Actions secret `GEMINI_API_KEY` |
 | 3 | Content generation | **Done** — platform copy + Shorts metadata + tracking previews |
-| 4 | **YouTube Shorts API / OAuth** | **Active now** — see [YOUTUBE_SHORTS_SETUP.md](YOUTUBE_SHORTS_SETUP.md) |
+| 4 | **YouTube Shorts API / OAuth** | **Active now** — project scaffolding ready; Google Cloud Enable click required — [YOUTUBE_SHORTS_SETUP.md](YOUTUBE_SHORTS_SETUP.md) |
 | 5 | Pinterest API / OAuth | After YouTube Shorts OAuth is complete |
 | 6 | Instagram Meta API | After Meta developer access is available |
 | 7 | Facebook Meta API | After Instagram |

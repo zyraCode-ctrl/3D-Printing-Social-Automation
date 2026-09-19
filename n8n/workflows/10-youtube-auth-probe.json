@@ -1,0 +1,204 @@
+{
+  "id": "3dprYtAuthProbe10",
+  "name": "10 YouTube Shorts Auth Probe",
+  "active": false,
+  "isArchived": false,
+  "nodes": [
+    {
+      "id": "fda7478f-2b44-50e0-8bb9-fbce307d9cef",
+      "name": "Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -400,
+        -220
+      ],
+      "parameters": {
+        "content": "## YouTube Shorts Auth Probe\n\nManual test only. Does **not** upload Shorts or change channel content.\n\nUses YouTube Data API `channels.list?mine=true` (read-only) with **YouTube account** OAuth.\n\n1. Complete Google Cloud OAuth client + n8n **Sign in with Google** first.\n2. Run this workflow manually.\n3. Confirm a channel id/title is returned.\n4. Keep `DRY_RUN=true` \u2014 publisher upload stays blocked.\n",
+        "width": 400,
+        "height": 340,
+        "color": 4
+      }
+    },
+    {
+      "id": "1f269064-6b6b-57e8-9f55-f877425d2cb3",
+      "name": "Run Manually",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {}
+    },
+    {
+      "id": "e49a1661-9515-5a25-baaf-5310465323af",
+      "name": "Load Config",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        240,
+        0
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "http://tracking-api:8081/config",
+        "options": {
+          "timeout": 60000
+        }
+      }
+    },
+    {
+      "id": "08c90dd2-b286-5a4b-8409-ce5f95786a65",
+      "name": "YouTube Readiness",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        480,
+        0
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "http://tracking-api:8081/youtube/readiness",
+        "options": {
+          "timeout": 60000
+        }
+      }
+    },
+    {
+      "id": "cb5a17df-ee6f-5b11-a7b1-97c85b9aa7de",
+      "name": "Guard Dry Run",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        720,
+        0
+      ],
+      "parameters": {
+        "jsCode": "const config = $('Load Config').first().json;\nconst readiness = $json;\nif (config.dry_run !== true) {\n  throw new Error('Refusing YouTube probe while DRY_RUN is not true.');\n}\nif (String(config.youtube_format || readiness.youtube_format || '') !== 'shorts') {\n  throw new Error('youtube_format must be shorts');\n}\nreturn [{ json: {\n  dry_run: true,\n  readiness,\n  privacy: config.youtube_privacy_status || 'private',\n  note: 'About to call channels.list mine=true \u2014 read only, no upload.'\n} }];\n"
+      }
+    },
+    {
+      "id": "aeed205f-4eda-5a2a-95fa-d101a6c989ab",
+      "name": "List My Channel",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        980,
+        0
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "https://www.googleapis.com/youtube/v3/channels",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "part",
+              "value": "snippet,status"
+            },
+            {
+              "name": "mine",
+              "value": "true"
+            }
+          ]
+        },
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "youTubeOAuth2Api",
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "credentials": {
+        "youTubeOAuth2Api": {
+          "id": "youTubeOAuth2Api",
+          "name": "YouTube account"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "84e4d86f-0fac-5d80-90a8-a359b21e5f0a",
+      "name": "Summarize Probe",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1220,
+        0
+      ],
+      "parameters": {
+        "jsCode": "const readiness = $('YouTube Readiness').first().json;\nconst raw = $json;\nconst err = raw.error || raw.message || null;\nconst items = Array.isArray(raw.items) ? raw.items : [];\nconst channels = items.map((ch) => ({\n  id: ch.id,\n  title: (ch.snippet && ch.snippet.title) || null,\n  privacyStatus: (ch.status && ch.status.privacyStatus) || null,\n}));\nconst oauthOk = !err && channels.length > 0;\nreturn [{ json: {\n  dry_run: true,\n  youtube_format: readiness.youtube_format || 'shorts',\n  publish_blocked_by_dry_run: true,\n  upload_attempted: false,\n  oauth_ok: oauthOk,\n  channels_found: channels,\n  error: err ? (typeof err === 'string' ? err : (err.message || JSON.stringify(err).slice(0, 400))) : null,\n  readiness,\n  next: oauthOk\n    ? 'OAuth works. Keep DRY_RUN=true. Do not upload until explicit approval.'\n    : 'OAuth not connected yet. Finish Google Cloud client + n8n Sign in with Google.',\n} }];\n"
+      }
+    }
+  ],
+  "connections": {
+    "Run Manually": {
+      "main": [
+        [
+          {
+            "node": "Load Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Config": {
+      "main": [
+        [
+          {
+            "node": "YouTube Readiness",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "YouTube Readiness": {
+      "main": [
+        [
+          {
+            "node": "Guard Dry Run",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Guard Dry Run": {
+      "main": [
+        [
+          {
+            "node": "List My Channel",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "List My Channel": {
+      "main": [
+        [
+          {
+            "node": "Summarize Probe",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Asia/Kolkata",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false,
+    "errorWorkflow": "3dprErrorLog008"
+  },
+  "pinData": {},
+  "versionId": "2f904e5b-197f-5557-98ac-96eb29fc175d",
+  "meta": {
+    "templateCredsSetupCompleted": false
+  },
+  "tags": []
+}
