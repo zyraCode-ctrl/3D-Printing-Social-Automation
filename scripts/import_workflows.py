@@ -64,8 +64,12 @@ class N8n:
 
     def json(self, method: str, path: str, payload: dict | None = None) -> tuple[int, dict | list | str]:
         status, body, _headers = self.request(method, path, payload)
+        if not body:
+            return status, {}
+        if not body.lstrip().startswith(("{", "[")):
+            return status, body
         try:
-            parsed: dict | list | str = json.loads(body) if body else {}
+            parsed: dict | list | str = json.loads(body)
         except json.JSONDecodeError:
             parsed = body
         return status, parsed
@@ -83,6 +87,19 @@ def wait_http(url: str, attempts: int = 60) -> None:
         print(f"Waiting for {url} ({i + 1}/{attempts})")
         time.sleep(2)
     raise SystemExit(f"Timed out waiting for {url}")
+
+
+def wait_n8n_api(client: "N8n", attempts: int = 90) -> None:
+    """healthz can pass while REST still returns 'n8n is starting up'."""
+    for i in range(attempts):
+        status, body = client.json("GET", "/rest/settings")
+        text = body if isinstance(body, str) else json.dumps(body)[:120]
+        if status == 200 and isinstance(body, dict) and "n8n is starting up" not in text.lower():
+            print(f"n8n REST ready ({i + 1})")
+            return
+        print(f"Waiting for n8n REST ({i + 1}/{attempts}): {status} {text}")
+        time.sleep(2)
+    raise SystemExit("Timed out waiting for n8n REST API")
 
 
 def list_credentials(client: N8n) -> list[dict]:
@@ -224,6 +241,7 @@ def main() -> None:
     wait_http(n8n_url + "/healthz")
 
     client = N8n(n8n_url)
+    wait_n8n_api(client)
     email = env.get("N8N_OWNER_EMAIL", "admin@localhost.local")
     password = env.get("N8N_OWNER_PASSWORD", "")
     setup_payload = {
@@ -240,12 +258,16 @@ def main() -> None:
         {"emailOrLdapLoginId": email, "password": password},
     ]
     logged_in = False
-    for payload in login_payloads:
-        status, body = client.json("POST", "/rest/login", payload)
-        print(f"Login: {status}")
-        if status in {200, 201}:
-            logged_in = True
+    for attempt in range(30):
+        for payload in login_payloads:
+            status, body = client.json("POST", "/rest/login", payload)
+            print(f"Login attempt {attempt + 1}: {status}")
+            if status in {200, 201} and isinstance(body, dict):
+                logged_in = True
+                break
+        if logged_in:
             break
+        time.sleep(2)
     if not logged_in:
         raise SystemExit("Could not log in to n8n. Open http://localhost:5678 and finish setup in the browser.")
 

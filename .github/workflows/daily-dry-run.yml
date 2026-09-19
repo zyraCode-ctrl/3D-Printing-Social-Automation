@@ -97,9 +97,10 @@ jobs:
       - name: Wait for health
         run: |
           set -euo pipefail
-          for i in $(seq 1 60); do
+          for i in $(seq 1 90); do
             if curl -fsS http://127.0.0.1:8081/health >/dev/null && curl -fsS http://127.0.0.1:5678/healthz >/dev/null; then
-              echo "Services healthy"
+              echo "Health endpoints OK — waiting for n8n REST warm-up"
+              sleep 20
               exit 0
             fi
             echo "Waiting ($i)..."
