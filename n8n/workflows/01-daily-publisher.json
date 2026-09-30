@@ -75,7 +75,7 @@
         "url": "http://tracking-api:8081/logs",
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({ level: 'info', event: 'daily_execution', message: 'Daily publisher started', details: { dry_run: $json.dry_run, timezone: $json.timezone, publish_time: $json.publish_time, ai_provider: $json.ai_provider } }) }}",
+        "jsonBody": "={{ JSON.stringify({ level: 'info', event: 'daily_execution', message: 'Daily publisher started', details: { dry_run: $json.dry_run, timezone: $json.timezone, publish_times: $json.publish_times, ai_provider: $json.ai_provider } }) }}",
         "options": {
           "timeout": 120000
         }

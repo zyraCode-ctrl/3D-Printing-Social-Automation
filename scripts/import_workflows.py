@@ -394,6 +394,7 @@ def main() -> None:
         "14-live-pinterest-video.json",
         "15-live-facebook-reel.json",
         "16-queue-preparer.json",
+        "17-publish-path-check.json",
         "01-daily-publisher.json",
         "02-admin-control.json",
     ]

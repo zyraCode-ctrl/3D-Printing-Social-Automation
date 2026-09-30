@@ -1,13 +1,17 @@
 # Dashboard
 
-Open **http://localhost:8081/dashboard** while the Docker stack is running (`docker compose up -d`). It is served by the existing `tracking-api` container and reads the same SQLite database and n8n executions — no extra service, database, or hosting cost. The port is bound to `127.0.0.1`, so it is only reachable from this PC.
+The same page runs in two places:
+
+- **Production**: the repository's GitHub Pages site, refreshed by every production run (`site/data.json`). See [PRODUCTION.md](PRODUCTION.md).
+- **Local**: **http://localhost:8081/dashboard** while the Docker stack is running. It is served by the `tracking-api` container and bound to `127.0.0.1`, so it is only reachable from this PC. Local stays in DRY_RUN.
 
 ## What it shows
 
-- **System status** (read-only): Tracking API, database, n8n, scheduler, GitHub sync, and a prominent **DRY RUN / LIVE MODE** bar. DRY_RUN can only be changed in `.env`, never from the page.
-- **Totals**: products, published, queue fill (x/3), platform successes / failures / skips.
-- **Today's post** and **Next post** (the queue head and when it will go out).
-- **Rolling queue**: the next 3 products with content already generated.
+- **Status**: a prominent **DRY RUN / LIVE** bar (the Facebook Page ID posts go to), validation result, buffer and system health. Live mode can only be changed with the `PRODUCTION_LIVE` repository variable, never from the page.
+- **Totals**: products, published, queue fill (x/8, minimum 6), platform successes / failures / skips.
+- **Today's posts**: both slots with state (scheduled, publishing, published, partial, failed, missed), platform statuses, post IDs, attempts, timestamps and errors.
+- **Next scheduled posts**: the next 6+ slots and the product whose content is ready for each.
+- **Rolling queue**: the products with content already generated, in publishing order.
 - **Per platform**: Instagram, Facebook Page, Pinterest, YouTube Shorts — success/failed/skipped counts and the latest post link.
 - **Executions**: last/next run, AI provider used, retries and errors in the last 24 h.
 - **Workflow runs** with a step-by-step detail panel, the **Products** table (status and platform post IDs per product), and **Recent activity**.
@@ -16,12 +20,12 @@ The page refreshes every 10 seconds. Tokens that appear in logs are redacted bef
 
 ## Schedule settings
 
-Pick a time with the time picker and click **Save**.
+Edit the daily times (default **6:00 PM and 10:00 PM**, up to 6 per day), add or remove times, and click **Save schedule**.
 
-- The time is written to `config/schedule.json` — the single source of truth. Timezone: **Asia/Kolkata**.
-- The `tracking-api` scheduler checks every 30 seconds and starts **01 Daily Publisher** once per day at or after that time. If the PC was off at that time, it catches up the same day when the stack starts again (it never posts twice in one day).
-- If you save a time that has already passed today, today's run is skipped and the new time applies from tomorrow. If today's post already went out, changing the time does not post again today.
-- The file lives in the repo, so the time survives rebuilds and redeploys.
+- The times are written to `config/schedule.json` — the single source of truth. Timezone: **Asia/Kolkata**. The buffer target follows automatically (posts per day × 4, minimum posts per day × 3).
+- On the production (GitHub Pages) dashboard, saving commits the file through the GitHub API with a fine-grained token (*Contents: read & write* on this repo) that stays in your browser. The production gate uses the new times from its next 10-minute check.
+- A newly added time that has already passed today starts tomorrow (it is recorded in `skip_slots`, so there is no surprise post right after saving). Slots already published are never published again.
+- The file lives in the repo, so the times survive rebuilds and redeploys.
 
 ### Keep GitHub Actions on the same time (optional)
 
@@ -44,9 +48,9 @@ The dashboard shows the sync result next to the schedule. If a push fails (e.g. 
 
 ## Rolling queue
 
-- **16 Content Queue Preparer** keeps up to 3 products prepared (Drive media + AI content + saved preview), always in Product ID order, skipping products already published or queued. Saved previews are reused instead of calling the AI again.
-- At the scheduled time, **01 Daily Publisher** claims only the queue head — one product per day — and publishes it (or logs a preview in DRY_RUN).
-- When the product finishes, it leaves the queue and the preparer refills the free slot. A failed publish returns the product to the queue so it is retried; platforms that already succeeded are never re-posted.
+- **16 Content Queue Preparer** keeps up to 8 products prepared (Drive media + one AI call for all platforms + saved preview), always in Product ID order, skipping products already published or queued. Saved previews are reused instead of calling the AI again.
+- At each scheduled time, **01 Daily Publisher** claims only the queue head — one product per slot — and publishes it (or logs a preview in DRY_RUN).
+- When the product finishes, it leaves the queue and the preparer refills the free slot. A failed publish returns the product to the queue and is retried up to 3 times; platforms that already succeeded are never re-posted.
 
 ## Local checks
 

@@ -141,7 +141,7 @@
         -120
       ],
       "parameters": {
-        "jsCode": "const job = $('When Called by Another Workflow').first().json;\nconst config = $('Load Config').first().json;\nconst preview = $json;\nconst mediaType = String(preview.media_type || job.media_type || '');\nif (mediaType === 'image') {\n  return [{ json: {\n    product_id: job.product_id,\n    platform: 'youtube',\n    status: 'skipped',\n    skipped: true,\n    reason: 'YouTube Shorts require video media. Image-only products are skipped.',\n    skip_upload: true\n  } }];\n}\nconst content = (preview && preview.content) || job.content || {};\nconst yt = content.youtube || {};\nlet title = String(yt.title || '').trim();\nif (title.length > 70) title = title.slice(0, 67).trim() + '...';\nlet description = String(yt.description || '').trim();\nconst hashtags = Array.isArray(yt.hashtags) ? yt.hashtags.map(String) : [];\nconst tags = Array.isArray(yt.tags) ? yt.tags.map(String) : [];\nconst lowerTags = hashtags.map((h) => h.toLowerCase());\nif (!lowerTags.some((h) => h.replace(/^#/, '') === 'shorts')) {\n  hashtags.push('#shorts');\n}\nif (!/\\b#?shorts\\b/i.test(description)) {\n  description = (description ? description + '\\n\\n' : '') + '#Shorts';\n}\nconst tagLine = hashtags.join(' ');\nif (tagLine && !description.includes(tagLine)) {\n  description = description + '\\n' + tagLine;\n}\nreturn [{ json: {\n  product_id: job.product_id,\n  platform: 'youtube',\n  skip_upload: false,\n  shorts: true,\n  title,\n  description,\n  tags,\n  hashtags,\n  privacyStatus: config.youtube_privacy_status || 'private',\n  filename: preview.filename || job.filename || null,\n  drive_file_id: preview.drive_file_id || job.drive_file_id || null,\n  local_path: preview.local_path || job.local_path || null,\n  content\n} }];\n"
+        "jsCode": "const job = $('When Called by Another Workflow').first().json;\nconst config = $('Load Config').first().json;\nconst preview = $json;\nconst mediaType = String(preview.media_type || job.media_type || '');\nif (mediaType === 'image') {\n  return [{ json: {\n    product_id: job.product_id,\n    platform: 'youtube',\n    status: 'skipped',\n    skipped: true,\n    reason: 'YouTube Shorts require video media. Image-only products are skipped.',\n    skip_upload: true\n  } }];\n}\nconst content = (preview && preview.content) || job.content || {};\nconst yt = content.youtube || {};\nlet title = String(yt.title || '').trim();\nif (title.length > 70) title = title.slice(0, 67).trim() + '...';\nlet description = String(yt.description || '').trim();\nconst hashtags = Array.isArray(yt.hashtags) ? yt.hashtags.map(String) : [];\nconst tags = Array.isArray(yt.tags) ? yt.tags.map(String) : [];\nconst lowerTags = hashtags.map((h) => h.toLowerCase());\nif (!lowerTags.some((h) => h.replace(/^#/, '') === 'shorts')) {\n  hashtags.push('#shorts');\n}\nif (!/\\b#?shorts\\b/i.test(description)) {\n  description = (description ? description + '\\n\\n' : '') + '#Shorts';\n}\nconst tagLine = hashtags.join(' ');\nif (tagLine && !description.includes(tagLine)) {\n  description = description + '\\n' + tagLine;\n}\nreturn [{ json: {\n  product_id: job.product_id,\n  platform: 'youtube',\n  skip_upload: false,\n  shorts: true,\n  title,\n  description,\n  tags,\n  hashtags,\n  privacyStatus: config.youtube_privacy_status || 'private',\n  filename: preview.filename || job.filename || null,\n  drive_file_id: preview.drive_file_id || job.drive_file_id || null,\n  local_path: job.local_path || preview.local_path || null,\n  content\n} }];\n"
       }
     },
     {
@@ -181,15 +181,18 @@
     {
       "id": "91cae1ab-bd6a-5899-819f-292f108a4d88",
       "name": "Read Short Binary",
-      "type": "n8n-nodes-base.readBinaryFile",
+      "type": "n8n-nodes-base.readWriteFile",
       "typeVersion": 1,
       "position": [
         1700,
         -200
       ],
       "parameters": {
-        "filePath": "={{ $json.local_path }}",
-        "dataPropertyName": "data"
+        "operation": "read",
+        "fileSelector": "={{ $json.local_path }}",
+        "options": {
+          "dataPropertyName": "data"
+        }
       },
       "onError": "continueRegularOutput"
     },

@@ -75,7 +75,7 @@
         0
       ],
       "parameters": {
-        "jsCode": "const config = $('Load Config').first().json;\nconst readiness = $json;\nif (config.dry_run !== true) {\n  throw new Error('Refusing YouTube probe while DRY_RUN is not true.');\n}\nif (String(config.youtube_format || readiness.youtube_format || '') !== 'shorts') {\n  throw new Error('youtube_format must be shorts');\n}\nreturn [{ json: {\n  dry_run: true,\n  readiness,\n  privacy: config.youtube_privacy_status || 'private',\n  note: 'About to call channels.list mine=true \u2014 read only, no upload.'\n} }];\n"
+        "jsCode": "const config = $('Load Config').first().json;\nconst readiness = $json;\nif (String(config.youtube_format || readiness.youtube_format || '') !== 'shorts') {\n  throw new Error('youtube_format must be shorts');\n}\nreturn [{ json: {\n  dry_run: config.dry_run,\n  readiness,\n  privacy: config.youtube_privacy_status || 'private',\n  note: 'About to call channels.list mine=true \u2014 read only, no upload.'\n} }];\n"
       }
     },
     {

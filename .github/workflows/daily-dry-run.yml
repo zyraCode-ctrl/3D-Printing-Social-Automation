@@ -1,14 +1,9 @@
-name: Daily social dry-run
+name: Dry-run verification
 
-# Free GitHub-hosted runner (public repo = no cost). Keeps DRY_RUN=true — never publishes.
-# The daily time is NOT hard-coded here: it lives in config/schedule.json, which the dashboard
-# saves and pushes. GitHub cannot rewrite its own cron with the default token, so this workflow
-# ticks every 15 minutes and the gate job runs the real job once per Asia/Kolkata day at/after
-# the saved time.
+# Verifies every code change end-to-end on a fresh stack with DRY_RUN=true — never publishes and
+# never touches production state. Live publishing runs in production.yml.
 
 on:
-  schedule:
-    - cron: "*/15 * * * *"
   workflow_dispatch:
   push:
     branches: [master, main]
@@ -27,30 +22,7 @@ permissions:
   actions: read
 
 jobs:
-  gate:
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    outputs:
-      due: ${{ steps.gate.outputs.due }}
-      marker_key: ${{ steps.gate.outputs.marker_key }}
-    steps:
-      - name: Checkout schedule
-        uses: actions/checkout@v4
-        with:
-          sparse-checkout: |
-            config/schedule.json
-            scripts/schedule_gate.py
-          sparse-checkout-cone-mode: false
-
-      - name: Decide if the daily run is due
-        id: gate
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-        run: python3 scripts/schedule_gate.py
-
   dry-run:
-    needs: gate
-    if: needs.gate.outputs.due == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 45
     concurrency:
@@ -64,14 +36,6 @@ jobs:
         run: |
           python3 scripts/test_schedule_queue.py
           python3 scripts/validate_workflows.py
-
-      - name: Restore tracking DB cache
-        uses: actions/cache@v4
-        with:
-          path: data/db
-          key: tracking-db-${{ github.run_id }}
-          restore-keys: |
-            tracking-db-
 
       - name: Create runtime .env
         env:
@@ -180,19 +144,8 @@ jobs:
         run: |
           set -euo pipefail
           curl -fsS http://127.0.0.1:8081/dashboard | grep -q "Schedule settings"
-          curl -fsS http://127.0.0.1:8081/schedule | python3 -c "import json,sys; s=json.load(sys.stdin); want=json.load(open('config/schedule.json'))['publish_time']; assert s['publish_time']==want, s; print('schedule', s['publish_time'], s['timezone'], 'next', s['next_run']['at'])"
+          curl -fsS http://127.0.0.1:8081/schedule | python3 -c "import json,sys; s=json.load(sys.stdin); want=json.load(open('config/schedule.json'))['publish_times']; assert s['publish_times']==want, s; print('schedule', s['publish_times'], s['timezone'], 'next', [u['slot'] for u in s['upcoming'][:6]])"
           curl -fsS http://127.0.0.1:8081/queue | python3 -c "import json,sys; q=json.load(sys.stdin); print('queue', [r['product_id'] for r in q['active']], 'size', q['queue_size'])"
-
-      - name: Mark today's scheduled run as done
-        if: success() && github.event_name == 'schedule'
-        run: mkdir -p .daily-marker && date -u > .daily-marker/ran-at.txt
-
-      - name: Save daily marker
-        if: success() && github.event_name == 'schedule'
-        uses: actions/cache/save@v4
-        with:
-          path: .daily-marker
-          key: ${{ needs.gate.outputs.marker_key }}
 
       - name: Dump logs on failure
         if: failure()

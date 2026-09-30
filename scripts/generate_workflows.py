@@ -24,6 +24,7 @@ WF = {
     "live_pin": "3dprLivePinVid014",
     "live_fb": "3dprLiveFbReel015",
     "queue_prep": "3dprQueuePrep016",
+    "path_check": "3dprPathCheck017",
 }
 
 TRACKING = "http://tracking-api:8081"
@@ -678,221 +679,254 @@ return [{{ json: {{ product_id: job.product_id, platform: '{key}', status: 'publ
     return workflow(title, wf_id, nodes, pairs)
 
 
-def instagram_workflow() -> dict:
-    note = """## Instagram (official Meta Graph API)
+def graph_http(wf: str, name: str, method: str, url: str, pos: list[int], *, headers: list[dict] | None = None,
+               json_body: str | None = None, binary: bool = False, query: list[dict] | None = None, timeout: int = 180000) -> dict:
+    params: dict = {"method": method, "url": url, "options": {"timeout": timeout}}
+    if headers:
+        params["sendHeaders"] = True
+        params["headerParameters"] = {"parameters": headers}
+    if query:
+        params["sendQuery"] = True
+        params["queryParameters"] = {"parameters": query}
+    if json_body is not None:
+        params.update({"sendBody": True, "contentType": "raw", "rawContentType": "application/json", "body": json_body})
+    if binary:
+        params.update({"sendBody": True, "contentType": "binaryData", "inputDataFieldName": "data"})
+    return node(wf, name, "n8n-nodes-base.httpRequest", 4.5, params, pos, onError="continueRegularOutput")
 
-Uses Facebook Login + Instagram professional account linked to a Page.
 
-Flow (only when DRY_RUN=false):
-1. Create media container `POST /{ig-user-id}/media`
-2. Publish container `POST /{ig-user-id}/media_publish`
+def read_local_file(wf: str, name: str, path_expr: str, pos: list[int]) -> dict:
+    return node(
+        wf,
+        name,
+        "n8n-nodes-base.readWriteFile",
+        1,
+        {"operation": "read", "fileSelector": path_expr, "options": {"dataPropertyName": "data"}},
+        pos,
+        onError="continueRegularOutput",
+    )
 
-Requires:
-- n8n credential **Facebook Graph account** (Page access token)
-- `INSTAGRAM_BUSINESS_ACCOUNT_ID` and `META_GRAPH_VERSION` in `.env`
-- Publicly reachable media URL (Drive share / tunnel) for live posts
 
-`DRY_RUN=true` stops at Duplicate Check — nothing is posted.
-"""
-    nodes = [
-        sticky("instagram", "Note", note, [-360, -240], 360, 340, 4),
-        trigger_sub("instagram", [0, 0]),
-        http_get(
-            "instagram",
-            "Duplicate Check",
-            "={{ '" + TRACKING + "/products/' + $json.product_id + '/can-publish?platform=instagram' }}",
-            [240, 0],
-        ),
-        iff("instagram", "Allowed to Publish?", "={{ $json.allowed }}", TRUE, True, [500, 0]),
+VALIDATE_ONLY = "($('When Called by Another Workflow').first().json.validate_only === true)"
+VALIDATE_JS = "const validateOnly = $('When Called by Another Workflow').first().json.validate_only === true;\n"
+META_ERR_JS = "const errText = (r) => r && r.error ? String(r.error.description || r.error.message || JSON.stringify(r.error)).slice(0, 400) : null;\n"
+META_GET_JS = "const get = (n) => { try { return $(n).last().json; } catch (e) { return null; } };\n"
+
+
+def meta_job_head(wf: str, platform: str, prepare_name: str, prepare_js: str) -> list[dict]:
+    """Duplicate Check → Load Config → Load Preview → Media Size → Prepare job (shared by 04 + 05)."""
+    return [
+        trigger_sub(wf, [0, 0]),
+        http_get(wf, "Duplicate Check", "={{ '" + TRACKING + "/products/' + $json.product_id + '/can-publish?platform=" + platform + "' }}", [240, 0]),
+        # validate_only runs never publish or record results, so they may exercise the upload path in any mode.
+        iff(wf, "Allowed to Publish?", "={{ $json.allowed || " + VALIDATE_ONLY + " }}", TRUE, True, [480, 0]),
         code(
-            "instagram",
+            wf,
             "Blocked Result",
             """
 const job = $('When Called by Another Workflow').first().json;
 const check = $json;
 return [{ json: {
   product_id: job.product_id,
-  platform: 'instagram',
+  platform: '__P__',
   status: check.dry_run ? 'dry_run_skipped' : (check.status === 'published' ? 'published' : 'skipped'),
   skipped: true,
   reason: check.reason,
   post_id: check.post_id || null
 } }];
-""",
-            [760, 220],
+""".replace("__P__", platform),
+            [720, 260],
         ),
-        http_get("instagram", "Load Config", f"{TRACKING}/config", [760, -120]),
+        http_get(wf, "Load Config", f"{TRACKING}/config", [720, -120]),
         http_get(
-            "instagram",
+            wf,
             "Load Preview",
             "={{ '" + TRACKING + "/previews/' + $('When Called by Another Workflow').first().json.product_id }}",
-            [980, -120],
+            [920, -120],
+            onError="continueRegularOutput",
         ),
-        code(
-            "instagram",
-            "Prepare Instagram Job",
-            """
+        http_get(
+            wf,
+            "Media Size",
+            "={{ '" + TRACKING + "/media/size?name=' + encodeURIComponent(String(($json && $json.filename) || $('When Called by Another Workflow').first().json.filename || '').split('/').pop()) }}",
+            [1120, -120],
+            onError="continueRegularOutput",
+        ),
+        code(wf, prepare_name, prepare_js, [1320, -120]),
+        iff(wf, "Job Ready?", "={{ !$json.error }}", TRUE, True, [1520, -120]),
+    ]
+
+
+META_PREPARE_COMMON_JS = """
 const job = $('When Called by Another Workflow').first().json;
 const config = $('Load Config').first().json;
-const preview = $json;
-const content = (preview && preview.content) || job.content || {};
-const ig = content.instagram || {};
-if (!config.instagram_business_account_id) {
-  throw new Error('INSTAGRAM_BUSINESS_ACCOUNT_ID is missing in .env / tracking config.');
-}
-const caption = [ig.caption, (ig.hashtags || []).join(' '), ig.cta].filter(Boolean).join('\\n\\n');
+const loaded = $('Load Preview').first().json;
+const preview = loaded && !loaded.error ? loaded : {};
+const size = $('Media Size').first().json;
+const content = preview.content || job.content || {};
+const filename = String(preview.filename || job.filename || '');
+const isVideo = /\\.(mp4|mov)$/i.test(filename);
 const driveId = preview.drive_file_id || job.drive_file_id || null;
-const publicUrl = job.public_media_url
-  || (driveId ? ('https://drive.google.com/uc?export=download&id=' + driveId) : null);
-if (!publicUrl) {
-  throw new Error('No public_media_url / drive_file_id available for Instagram Graph publishing.');
-}
-const isImage = String(preview.media_type || job.media_type || '') === 'image'
-  || Boolean(job.image_file && !job.video_file);
-const version = config.meta_graph_version || 'v22.0';
-const igUser = config.instagram_business_account_id;
-const containerBody = isImage
-  ? { image_url: publicUrl, caption }
-  : { media_type: 'REELS', video_url: publicUrl, caption };
-return [{ json: {
+const imageUrl = job.public_media_url || (driveId ? ('https://drive.google.com/uc?export=download&id=' + driveId) : null);
+const join = (b) => [b.caption, (b.hashtags || []).join(' '), b.cta].filter(Boolean).join('\\n\\n');
+let error = null;
+if (!config.facebook_page_id) error = 'FACEBOOK_PAGE_ID is missing in .env';
+else if (isVideo && !(size && size.bytes)) error = 'Local video file not found for Product ' + job.product_id + ' (' + filename + ')';
+else if (!isVideo && !imageUrl) error = 'No image URL / Drive file id for Product ' + job.product_id;
+const base = {
   product_id: job.product_id,
-  platform: 'instagram',
-  config,
-  preview,
-  content,
-  caption,
-  public_media_url: publicUrl,
-  drive_file_id: driveId,
-  is_image: isImage,
-  container_url: 'https://graph.facebook.com/' + version + '/' + igUser + '/media',
-  publish_url: 'https://graph.facebook.com/' + version + '/' + igUser + '/media_publish',
-  container_body: containerBody
-} }];
-""",
-            [1220, -120],
-        ),
-        node(
-            "instagram",
-            "Create Media Container",
-            "n8n-nodes-base.httpRequest",
-            4.5,
-            {
-                "method": "POST",
-                "url": "={{ $json.container_url }}",
-                "authentication": "predefinedCredentialType",
-                "nodeCredentialType": "facebookGraphApi",
-                "sendBody": True,
-                "contentType": "raw",
-                "rawContentType": "application/json",
-                "body": "={{ JSON.stringify($json.container_body) }}",
-                "options": {"timeout": 180000},
-            },
-            [1480, -120],
-            credentials=META_CRED,
-            onError="continueRegularOutput",
-        ),
-        code(
-            "instagram",
-            "Build Publish Body",
-            """
-const prepared = $('Prepare Instagram Job').first().json;
-const created = $json;
-if (created.error) {
-  return [{ json: {
-    product_id: prepared.product_id,
-    platform: 'instagram',
-    status: 'failed',
-    error_message: created.error.message || JSON.stringify(created.error),
-    skip_publish: true
-  } }];
-}
-const creationId = created.id || created.creation_id;
-if (!creationId) {
-  return [{ json: {
-    product_id: prepared.product_id,
-    platform: 'instagram',
-    status: 'failed',
-    error_message: 'Instagram container create returned no id: ' + JSON.stringify(created).slice(0, 400),
-    skip_publish: true
-  } }];
-}
+  version: config.meta_graph_version || 'v22.0',
+  page_id: String(config.facebook_page_id || ''),
+  is_video: isVideo,
+  local_path: size && size.path ? size.path : null,
+  file_size: size && size.bytes ? size.bytes : 0,
+  image_url: imageUrl,
+  error
+};
+"""
+
+
+def instagram_workflow() -> dict:
+    wf = "instagram"
+    job = "$('Prepare Instagram Job').first().json"
+    graph = "https://graph.facebook.com/' + " + job + ".version + '"
+    note = """## Instagram (official Meta Graph API)
+
+Posts as the Instagram professional account linked to `FACEBOOK_PAGE_ID`, using that Page's token.
+
+Video products (Reels): resumable upload of the local file (no public URL needed)
+→ wait until the container is `FINISHED` → `media_publish`.
+Image products: container from `image_url` → wait → `media_publish`.
+
+`DRY_RUN=true` stops at Duplicate Check — nothing is posted. Already-published products are never re-posted.
+"""
+    prepare_js = META_PREPARE_COMMON_JS + """
+const ig = content.instagram || {};
+if (!error && !config.instagram_business_account_id) base.error = 'INSTAGRAM_BUSINESS_ACCOUNT_ID is missing in .env';
+const caption = join(ig);
 return [{ json: {
-  ...prepared,
-  creation_id: creationId,
-  skip_publish: false,
-  publish_body: { creation_id: creationId }
+  ...base,
+  platform: 'instagram',
+  ig_user_id: config.instagram_business_account_id,
+  container_body: isVideo
+    ? { media_type: 'REELS', upload_type: 'resumable', share_to_feed: true, caption }
+    : { image_url: imageUrl, caption }
 } }];
-""",
-            [1720, -120],
+"""
+    upload_headers = [
+        PAGE_TOKEN_HEADER,
+        {"name": "offset", "value": "0"},
+        {"name": "file_size", "value": "={{ String(" + job + ".file_size) }}"},
+    ]
+    nodes = [
+        sticky(wf, "Note", note, [-380, -300], 360, 300, 4),
+        *meta_job_head(wf, "instagram", "Prepare Instagram Job", prepare_js),
+        *page_token_guard_nodes(wf, job + ".version", job + ".page_id", [1720, -120]),
+        iff(wf, "Page Verified?", "={{ $json.guard_ok }}", TRUE, True, [2280, -120]),
+        graph_http(
+            wf,
+            "IG Create Container",
+            "POST",
+            "={{ '" + graph + "/' + " + job + ".ig_user_id + '/media' }}",
+            [2480, -120],
+            headers=[PAGE_TOKEN_HEADER],
+            json_body="={{ JSON.stringify(" + job + ".container_body) }}",
         ),
-        iff("instagram", "Container OK?", "={{ !$json.skip_publish }}", TRUE, True, [1960, -120]),
-        node(
-            "instagram",
-            "Publish Media Container",
-            "n8n-nodes-base.httpRequest",
-            4.5,
-            {
-                "method": "POST",
-                "url": "={{ $json.publish_url }}",
-                "authentication": "predefinedCredentialType",
-                "nodeCredentialType": "facebookGraphApi",
-                "sendBody": True,
-                "contentType": "raw",
-                "rawContentType": "application/json",
-                "body": "={{ JSON.stringify($json.publish_body) }}",
-                "options": {"timeout": 180000},
-            },
-            [2200, -200],
-            credentials=META_CRED,
-            onError="continueRegularOutput",
+        iff(wf, "Upload Video?", "={{ " + job + ".is_video && Boolean($json.id) }}", TRUE, True, [2680, -120]),
+        read_local_file(wf, "Read Video", "={{ " + job + ".local_path }}", [2880, -240]),
+        graph_http(
+            wf,
+            "IG Upload",
+            "POST",
+            "={{ 'https://rupload.facebook.com/ig-api-upload/' + " + job + ".version + '/' + $('IG Create Container').first().json.id }}",
+            [3080, -240],
+            headers=upload_headers,
+            binary=True,
+            timeout=300000,
+        ),
+        graph_http(
+            wf,
+            "IG Check Status",
+            "GET",
+            "={{ '" + graph + "/' + ($('IG Create Container').first().json.id || 'missing') + '?fields=status_code,status' }}",
+            [3280, -120],
+            headers=[PAGE_TOKEN_HEADER],
+            timeout=60000,
         ),
         code(
-            "instagram",
+            wf,
+            "IG Status Gate",
+            META_ERR_JS
+            + META_GET_JS
+            + """
+const created = $('IG Create Container').first().json;
+const upload = get('IG Upload');
+const status = $json;
+const attempt = $runIndex;
+const firstErr = errText(created) || (created.id ? null : 'Container create returned no id') || errText(upload) || errText(status);
+if (firstErr) return [{ json: { state: 'fail', error: firstErr } }];
+const code = String(status.status_code || '');
+if (code === 'FINISHED') return [{ json: { state: 'ready', attempt } }];
+if (code === 'ERROR' || code === 'EXPIRED') return [{ json: { state: 'fail', error: 'Instagram processing ' + code + ': ' + (status.status || '') } }];
+if (attempt >= 30) return [{ json: { state: 'fail', error: 'Instagram processing timed out (' + code + ')' } }];
+return [{ json: { state: 'wait', attempt, status_code: code } }];
+""",
+            [3480, -120],
+        ),
+        iff(wf, "IG Ready?", "={{ $json.state }}", EQ_STR, "ready", [3680, -120]),
+        iff(wf, "Publish Allowed?", "={{ !" + VALIDATE_ONLY + " }}", TRUE, True, [3780, -320]),
+        iff(wf, "IG Keep Waiting?", "={{ $json.state }}", EQ_STR, "wait", [3680, 100]),
+        node(wf, "IG Wait", "n8n-nodes-base.wait", 1.1, {"resume": "timeInterval", "amount": 10, "unit": "seconds"}, [3880, 200]),
+        graph_http(
+            wf,
+            "IG Publish",
+            "POST",
+            "={{ '" + graph + "/' + " + job + ".ig_user_id + '/media_publish' }}",
+            [3880, -220],
+            headers=[PAGE_TOKEN_HEADER],
+            json_body="={{ JSON.stringify({ creation_id: $('IG Create Container').first().json.id }) }}",
+        ),
+        graph_http(
+            wf,
+            "IG Permalink",
+            "GET",
+            "={{ '" + graph + "/' + ($json.id || 'missing') + '?fields=id,permalink' }}",
+            [4080, -220],
+            headers=[PAGE_TOKEN_HEADER],
+            timeout=60000,
+        ),
+        code(
+            wf,
             "Interpret Result",
-            """
-const prepared = $('Prepare Instagram Job').first().json;
-const built = $('Build Publish Body').first().json;
-const response = $json;
-if (built.skip_publish) {
-  return [{ json: {
-    product_id: prepared.product_id,
-    platform: 'instagram',
-    status: 'failed',
-    error_message: built.error_message || 'container create failed'
-  } }];
-}
-if (response.error) {
-  return [{ json: {
-    product_id: prepared.product_id,
-    platform: 'instagram',
-    status: 'failed',
-    error_message: response.error.message || JSON.stringify(response.error)
-  } }];
-}
-const postId = response.id || response.post_id || null;
-if (!postId) {
-  return [{ json: {
-    product_id: prepared.product_id,
-    platform: 'instagram',
-    status: 'failed',
-    error_message: 'No Instagram media id in publish response: ' + JSON.stringify(response).slice(0, 400)
-  } }];
-}
-return [{ json: {
-  product_id: prepared.product_id,
-  platform: 'instagram',
-  status: 'published',
-  post_id: String(postId)
-} }];
+            META_ERR_JS
+            + META_GET_JS
+            + VALIDATE_JS
+            + """
+const prep = get('Prepare Instagram Job');
+const base = { product_id: prep.product_id, platform: 'instagram' };
+const fail = (msg) => [{ json: { ...base, status: 'failed', error_message: String(msg || 'unknown error').slice(0, 500) } }];
+if (prep.error) return fail(prep.error);
+const guard = get('Page Guard');
+if (!guard || !guard.guard_ok) return fail('Not posted: ' + ((guard && guard.error) || 'Page check failed'));
+const gate = get('IG Status Gate');
+if (!gate) return fail(errText(get('IG Create Container')) || 'Instagram container was not created');
+if (gate.state !== 'ready') return fail(gate.error);
+if (validateOnly) return [{ json: { ...base, status: 'validated', validate_only: true, container_id: String(get('IG Create Container').id), status_code: 'FINISHED', is_video: prep.is_video, checks: gate.attempt + 1 } }];
+const pub = get('IG Publish');
+if (!pub || errText(pub) || !pub.id) return fail(errText(pub) || 'media_publish returned no id');
+const link = get('IG Permalink');
+return [{ json: { ...base, status: 'published', post_id: String(pub.id), url: (link && link.permalink) || null } }];
 """,
-            [2440, -120],
+            [4280, -120],
         ),
+        iff(wf, "Record Result?", "={{ !" + VALIDATE_ONLY + " }}", TRUE, True, [4380, -120]),
+        noop(wf, "Validation Result", [4580, -260]),
         http_post_json(
-            "instagram",
+            wf,
             "Store Platform Result",
             "={{ '" + TRACKING + "/products/' + $json.product_id + '/platform-result' }}",
             "={{ JSON.stringify({ platform: $json.platform, status: $json.status === 'dry_run_skipped' ? 'pending' : ($json.status === 'skipped' ? 'skipped' : $json.status), post_id: $json.post_id || null, error_message: $json.error_message || $json.reason || null }) }}",
-            [2680, 40],
+            [4480, 40],
         ),
     ]
     pairs = [
@@ -901,14 +935,35 @@ return [{ json: {
         ("Allowed to Publish?", "Load Config", 0),
         ("Allowed to Publish?", "Blocked Result", 1),
         ("Load Config", "Load Preview"),
-        ("Load Preview", "Prepare Instagram Job"),
-        ("Prepare Instagram Job", "Create Media Container"),
-        ("Create Media Container", "Build Publish Body"),
-        ("Build Publish Body", "Container OK?"),
-        ("Container OK?", "Publish Media Container", 0),
-        ("Container OK?", "Interpret Result", 1),
-        ("Publish Media Container", "Interpret Result"),
-        ("Interpret Result", "Store Platform Result"),
+        ("Load Preview", "Media Size"),
+        ("Media Size", "Prepare Instagram Job"),
+        ("Prepare Instagram Job", "Job Ready?"),
+        ("Job Ready?", "Get Page Token", 0),
+        ("Job Ready?", "Interpret Result", 1),
+        ("Get Page Token", "Verify Page Identity"),
+        ("Verify Page Identity", "Page Guard"),
+        ("Page Guard", "Page Verified?"),
+        ("Page Verified?", "IG Create Container", 0),
+        ("Page Verified?", "Interpret Result", 1),
+        ("IG Create Container", "Upload Video?"),
+        ("Upload Video?", "Read Video", 0),
+        ("Upload Video?", "IG Check Status", 1),
+        ("Read Video", "IG Upload"),
+        ("IG Upload", "IG Check Status"),
+        ("IG Check Status", "IG Status Gate"),
+        ("IG Status Gate", "IG Ready?"),
+        ("IG Ready?", "Publish Allowed?", 0),
+        ("IG Ready?", "IG Keep Waiting?", 1),
+        ("Publish Allowed?", "IG Publish", 0),
+        ("Publish Allowed?", "Interpret Result", 1),
+        ("IG Keep Waiting?", "IG Wait", 0),
+        ("IG Keep Waiting?", "Interpret Result", 1),
+        ("IG Wait", "IG Check Status"),
+        ("IG Publish", "IG Permalink"),
+        ("IG Permalink", "Interpret Result"),
+        ("Interpret Result", "Record Result?"),
+        ("Record Result?", "Store Platform Result", 0),
+        ("Record Result?", "Validation Result", 1),
         ("Blocked Result", "Store Platform Result"),
     ]
     return workflow("04 Instagram Publisher", WF["instagram"], nodes, pairs)
@@ -976,171 +1031,141 @@ return [{ json: { guard_ok: !error, error, page_id: expected, page_name: page.na
 
 
 def facebook_workflow() -> dict:
+    wf = "facebook"
+    job = "$('Prepare Facebook Job').first().json"
+    graph = "https://graph.facebook.com/' + " + job + ".version + '"
     note = """## Facebook Page (official Meta Graph API)
 
-Publishes to a Page:
-- Images: `POST /{page-id}/photos`
-- Videos: `POST /{page-id}/videos`
+Posts only to the Page `FACEBOOK_PAGE_ID`, never a personal profile:
+Page token for that Page → `GET /me` must return the same Page id → post → verify `from.id`.
 
-Page-only guard: fetches the Page token for `FACEBOOK_PAGE_ID`, checks `GET /me` with that
-token returns the same Page id, posts with the Page token, then verifies the post `from.id`.
-Never posts as a personal profile.
+Video products: Page Reel (`video_reels` start → upload local file → finish PUBLISHED).
+Image products: `POST /{page-id}/photos`.
 
-Requires:
-- n8n credential **Facebook Graph account** (user or Page token that can read the Page `access_token`, with `pages_manage_posts`)
-- `FACEBOOK_PAGE_ID` and `META_GRAPH_VERSION` in `.env`
-
-`DRY_RUN=true` stops at Duplicate Check — nothing is posted.
+`DRY_RUN=true` stops at Duplicate Check — nothing is posted. Already-published products are never re-posted.
 """
+    prepare_js = META_PREPARE_COMMON_JS + """
+return [{ json: { ...base, platform: 'facebook', message: join(content.facebook || {}) } }];
+"""
+    upload_headers = [
+        PAGE_TOKEN_HEADER,
+        {"name": "offset", "value": "0"},
+        {"name": "file_size", "value": "={{ String(" + job + ".file_size) }}"},
+    ]
     nodes = [
-        sticky("facebook", "Note", note, [-360, -240], 360, 320, 4),
-        trigger_sub("facebook", [0, 0]),
-        http_get(
-            "facebook",
-            "Duplicate Check",
-            "={{ '" + TRACKING + "/products/' + $json.product_id + '/can-publish?platform=facebook' }}",
-            [240, 0],
+        sticky(wf, "Note", note, [-380, -300], 360, 300, 4),
+        *meta_job_head(wf, "facebook", "Prepare Facebook Job", prepare_js),
+        *page_token_guard_nodes(wf, job + ".version", job + ".page_id", [1720, -120]),
+        iff(wf, "Page Verified?", "={{ $json.guard_ok }}", TRUE, True, [2280, -120]),
+        iff(wf, "Is Video?", "={{ " + job + ".is_video }}", TRUE, True, [2480, -120]),
+        iff(wf, "Finish Allowed?", "={{ !" + VALIDATE_ONLY + " }}", TRUE, True, [3180, -400]),
+        iff(wf, "Photo Allowed?", "={{ !" + VALIDATE_ONLY + " }}", TRUE, True, [2580, 100]),
+        graph_http(
+            wf,
+            "FB Reel Start",
+            "POST",
+            "={{ '" + graph + "/' + " + job + ".page_id + '/video_reels' }}",
+            [2680, -240],
+            headers=[PAGE_TOKEN_HEADER],
+            json_body="={{ JSON.stringify({ upload_phase: 'start' }) }}",
         ),
-        iff("facebook", "Allowed to Publish?", "={{ $json.allowed }}", TRUE, True, [500, 0]),
-        code(
-            "facebook",
-            "Blocked Result",
-            """
-const job = $('When Called by Another Workflow').first().json;
-const check = $json;
-return [{ json: {
-  product_id: job.product_id,
-  platform: 'facebook',
-  status: check.dry_run ? 'dry_run_skipped' : (check.status === 'published' ? 'published' : 'skipped'),
-  skipped: true,
-  reason: check.reason,
-  post_id: check.post_id || null
-} }];
-""",
-            [760, 220],
+        read_local_file(wf, "Read Video", "={{ " + job + ".local_path }}", [2880, -240]),
+        graph_http(
+            wf,
+            "FB Reel Upload",
+            "POST",
+            "={{ $('FB Reel Start').first().json.upload_url || ('https://rupload.facebook.com/video-upload/' + " + job + ".version + '/' + $('FB Reel Start').first().json.video_id) }}",
+            [3080, -240],
+            headers=upload_headers,
+            binary=True,
+            timeout=300000,
         ),
-        http_get("facebook", "Load Config", f"{TRACKING}/config", [760, -120]),
-        http_get(
-            "facebook",
-            "Load Preview",
-            "={{ '" + TRACKING + "/previews/' + $('When Called by Another Workflow').first().json.product_id }}",
-            [980, -120],
+        graph_http(
+            wf,
+            "FB Reel Finish",
+            "POST",
+            "={{ '" + graph + "/' + " + job + ".page_id + '/video_reels' }}",
+            [3280, -240],
+            headers=[PAGE_TOKEN_HEADER],
+            query=[
+                {"name": "upload_phase", "value": "finish"},
+                {"name": "video_id", "value": "={{ $('FB Reel Start').first().json.video_id }}"},
+                {"name": "video_state", "value": "PUBLISHED"},
+                {"name": "description", "value": "={{ " + job + ".message }}"},
+            ],
         ),
-        code(
-            "facebook",
-            "Prepare Facebook Job",
-            """
-const job = $('When Called by Another Workflow').first().json;
-const config = $('Load Config').first().json;
-const preview = $json;
-const content = (preview && preview.content) || job.content || {};
-const fb = content.facebook || {};
-if (!config.facebook_page_id) {
-  throw new Error('FACEBOOK_PAGE_ID is missing in .env / tracking config.');
-}
-const message = [fb.caption, (fb.hashtags || []).join(' '), fb.cta].filter(Boolean).join('\\n\\n');
-const driveId = preview.drive_file_id || job.drive_file_id || null;
-const publicUrl = job.public_media_url
-  || (driveId ? ('https://drive.google.com/uc?export=download&id=' + driveId) : null);
-if (!publicUrl) {
-  throw new Error('No public_media_url / drive_file_id available for Facebook Graph publishing.');
-}
-const isVideo = String(preview.media_type || job.media_type || '') === 'video'
-  || Boolean(job.video_file && !job.image_file)
-  || String(preview.media_type || '') === 'both';
-const version = config.meta_graph_version || 'v22.0';
-const pageId = config.facebook_page_id;
-const edge = isVideo ? 'videos' : 'photos';
-const body = isVideo
-  ? { description: message, file_url: publicUrl }
-  : { caption: message, url: publicUrl };
-return [{ json: {
-  product_id: job.product_id,
-  platform: 'facebook',
-  config,
-  preview,
-  content,
-  public_media_url: publicUrl,
-  drive_file_id: driveId,
-  publish_url: 'https://graph.facebook.com/' + version + '/' + pageId + '/' + edge,
-  publish_body: body
-} }];
-""",
-            [1220, -120],
+        graph_http(
+            wf,
+            "FB Publish Photo",
+            "POST",
+            "={{ '" + graph + "/' + " + job + ".page_id + '/photos' }}",
+            [2680, 0],
+            headers=[PAGE_TOKEN_HEADER],
+            json_body="={{ JSON.stringify({ url: " + job + ".image_url, caption: " + job + ".message }) }}",
         ),
-        *page_token_guard_nodes(
-            "facebook",
-            "$('Prepare Facebook Job').first().json.config.meta_graph_version",
-            "$('Prepare Facebook Job').first().json.config.facebook_page_id",
-            [1340, -120],
-        ),
-        iff("facebook", "Page Verified?", "={{ $json.guard_ok }}", TRUE, True, [1900, -120]),
-        node(
-            "facebook",
-            "Publish Official API",
-            "n8n-nodes-base.httpRequest",
-            4.5,
-            {
-                "method": "POST",
-                "url": "={{ $('Prepare Facebook Job').first().json.publish_url }}",
-                "sendHeaders": True,
-                "headerParameters": {"parameters": [PAGE_TOKEN_HEADER]},
-                "sendBody": True,
-                "contentType": "raw",
-                "rawContentType": "application/json",
-                "body": "={{ JSON.stringify($('Prepare Facebook Job').first().json.publish_body) }}",
-                "options": {"timeout": 180000},
-            },
-            [2120, -200],
-            onError="continueRegularOutput",
-        ),
-        node(
-            "facebook",
+        graph_http(
+            wf,
             "Verify Post Owner",
-            "n8n-nodes-base.httpRequest",
-            4.5,
-            {
-                "method": "GET",
-                "url": "={{ 'https://graph.facebook.com/' + $('Prepare Facebook Job').first().json.config.meta_graph_version + '/' + ($json.post_id || $json.id || 'missing') + '?fields=id,from{id,name},permalink_url' }}",
-                "sendHeaders": True,
-                "headerParameters": {"parameters": [PAGE_TOKEN_HEADER]},
-                "options": {"timeout": 60000},
-            },
-            [2340, -200],
-            onError="continueRegularOutput",
+            "GET",
+            "={{ '" + graph + "/' + (" + job + ".is_video ? ($('FB Reel Start').first().json.video_id || 'missing') : ($json.post_id || $json.id || 'missing')) + '?fields=id,from{id,name},permalink_url' }}",
+            [3480, -120],
+            headers=[PAGE_TOKEN_HEADER],
+            timeout=60000,
         ),
         code(
-            "facebook",
+            wf,
             "Interpret Result",
-            """
-const prepared = $('Prepare Facebook Job').first().json;
-const guard = $('Page Guard').first().json;
-const pageId = String(prepared.config.facebook_page_id);
-const base = { product_id: prepared.product_id, platform: 'facebook' };
-const errText = (r) => r && r.error ? String(r.error.description || r.error.message || JSON.stringify(r.error)).slice(0, 400) : null;
-if (!guard.guard_ok) return [{ json: { ...base, status: 'failed', error_message: 'Not posted: ' + guard.error } }];
-let response = {};
-let owner = {};
-try { response = $('Publish Official API').first().json; } catch (e) {}
-try { owner = $('Verify Post Owner').first().json; } catch (e) {}
-const postId = response.post_id || response.id || null;
-if (errText(response) || !postId) {
-  return [{ json: { ...base, status: 'failed', error_message: errText(response) || ('No Facebook post id in response: ' + JSON.stringify(response).slice(0, 400)) } }];
+            META_ERR_JS
+            + META_GET_JS
+            + VALIDATE_JS
+            + """
+const prep = get('Prepare Facebook Job');
+const base = { product_id: prep.product_id, platform: 'facebook' };
+const fail = (msg, extra) => [{ json: { ...base, ...(extra || {}), status: 'failed', error_message: String(msg || 'unknown error').slice(0, 500) } }];
+if (prep.error) return fail(prep.error);
+const guard = get('Page Guard');
+if (!guard || !guard.guard_ok) return fail('Not posted: ' + ((guard && guard.error) || 'Page check failed'));
+const pageId = String(prep.page_id);
+let postId = null;
+if (validateOnly) {
+  if (!prep.is_video) return [{ json: { ...base, status: 'validated', validate_only: true, page_id: pageId, page_name: guard.page_name, note: 'photo products: Page guard only (a photo upload would publish)' } }];
+  const start = get('FB Reel Start') || {};
+  const upload = get('FB Reel Upload') || {};
+  const err = errText(start) || (start.video_id ? null : 'video_reels start returned no video_id') || errText(upload) || (upload.success === true ? null : 'upload response: ' + JSON.stringify(upload).slice(0, 200));
+  if (err) return fail(err);
+  return [{ json: { ...base, status: 'validated', validate_only: true, page_id: pageId, page_name: guard.page_name, upload_session: String(start.video_id), note: 'uploaded, never finished — nothing published' } }];
 }
+if (prep.is_video) {
+  const start = get('FB Reel Start') || {};
+  const upload = get('FB Reel Upload');
+  const finish = get('FB Reel Finish') || {};
+  const err = errText(start) || (start.video_id ? null : 'video_reels start returned no video_id') || errText(upload) || errText(finish);
+  if (err || finish.success !== true) return fail(err || ('finish response: ' + JSON.stringify(finish).slice(0, 300)));
+  postId = String(start.video_id);
+} else {
+  const photo = get('FB Publish Photo') || {};
+  postId = photo.post_id || photo.id || null;
+  if (errText(photo) || !postId) return fail(errText(photo) || ('No Facebook post id in response: ' + JSON.stringify(photo).slice(0, 300)));
+  postId = String(postId);
+}
+const owner = get('Verify Post Owner') || {};
 const ownerId = owner.from ? String(owner.from.id) : null;
 if (ownerId && ownerId !== pageId) {
-  return [{ json: { ...base, status: 'failed', post_id: String(postId), error_message: 'Posted as ' + owner.from.name + ' (' + ownerId + '), not Page ' + pageId + '. Delete it manually.' } }];
+  return fail('Posted as ' + owner.from.name + ' (' + ownerId + '), not Page ' + pageId + '. Delete it manually.', { post_id: postId });
 }
-return [{ json: { ...base, status: 'published', post_id: String(postId), owner_verified: ownerId === pageId, permalink_url: owner.permalink_url || null } }];
+const url = owner.permalink_url || (prep.is_video ? 'https://www.facebook.com/reel/' + postId : null);
+return [{ json: { ...base, status: 'published', post_id: postId, owner_verified: ownerId === pageId, url } }];
 """,
-            [2560, -120],
+            [3680, -120],
         ),
+        iff(wf, "Record Result?", "={{ !" + VALIDATE_ONLY + " }}", TRUE, True, [3780, -120]),
+        noop(wf, "Validation Result", [3980, -260]),
         http_post_json(
-            "facebook",
+            wf,
             "Store Platform Result",
             "={{ '" + TRACKING + "/products/' + $json.product_id + '/platform-result' }}",
             "={{ JSON.stringify({ platform: $json.platform, status: $json.status === 'dry_run_skipped' ? 'pending' : ($json.status === 'skipped' ? 'skipped' : $json.status), post_id: $json.post_id || null, error_message: $json.error_message || $json.reason || null }) }}",
-            [1960, 40],
+            [3880, 40],
         ),
     ]
     pairs = [
@@ -1149,16 +1174,31 @@ return [{ json: { ...base, status: 'published', post_id: String(postId), owner_v
         ("Allowed to Publish?", "Load Config", 0),
         ("Allowed to Publish?", "Blocked Result", 1),
         ("Load Config", "Load Preview"),
-        ("Load Preview", "Prepare Facebook Job"),
-        ("Prepare Facebook Job", "Get Page Token"),
+        ("Load Preview", "Media Size"),
+        ("Media Size", "Prepare Facebook Job"),
+        ("Prepare Facebook Job", "Job Ready?"),
+        ("Job Ready?", "Get Page Token", 0),
+        ("Job Ready?", "Interpret Result", 1),
         ("Get Page Token", "Verify Page Identity"),
         ("Verify Page Identity", "Page Guard"),
         ("Page Guard", "Page Verified?"),
-        ("Page Verified?", "Publish Official API", 0),
+        ("Page Verified?", "Is Video?", 0),
         ("Page Verified?", "Interpret Result", 1),
-        ("Publish Official API", "Verify Post Owner"),
+        ("Is Video?", "FB Reel Start", 0),
+        ("Is Video?", "Photo Allowed?", 1),
+        ("Photo Allowed?", "FB Publish Photo", 0),
+        ("Photo Allowed?", "Interpret Result", 1),
+        ("FB Reel Start", "Read Video"),
+        ("Read Video", "FB Reel Upload"),
+        ("FB Reel Upload", "Finish Allowed?"),
+        ("Finish Allowed?", "FB Reel Finish", 0),
+        ("Finish Allowed?", "Interpret Result", 1),
+        ("FB Reel Finish", "Verify Post Owner"),
+        ("FB Publish Photo", "Verify Post Owner"),
         ("Verify Post Owner", "Interpret Result"),
-        ("Interpret Result", "Store Platform Result"),
+        ("Interpret Result", "Record Result?"),
+        ("Record Result?", "Store Platform Result", 0),
+        ("Record Result?", "Validation Result", 1),
         ("Blocked Result", "Store Platform Result"),
     ]
     return workflow("05 Facebook Publisher", WF["facebook"], nodes, pairs)
@@ -1279,25 +1319,14 @@ return [{ json: {
   privacyStatus: config.youtube_privacy_status || 'private',
   filename: preview.filename || job.filename || null,
   drive_file_id: preview.drive_file_id || job.drive_file_id || null,
-  local_path: preview.local_path || job.local_path || null,
+  local_path: job.local_path || preview.local_path || null,
   content
 } }];
 """,
             [1220, -120],
         ),
         iff("youtube", "Upload Short?", "={{ !$json.skip_upload }}", TRUE, True, [1460, -120]),
-        node(
-            "youtube",
-            "Read Short Binary",
-            "n8n-nodes-base.readBinaryFile",
-            1,
-            {
-                "filePath": "={{ $json.local_path }}",
-                "dataPropertyName": "data",
-            },
-            [1700, -200],
-            onError="continueRegularOutput",
-        ),
+        read_local_file("youtube", "Read Short Binary", "={{ $json.local_path }}", [1700, -200]),
         node(
             "youtube",
             "Upload YouTube Short",
@@ -1397,6 +1426,79 @@ return [{ json: {
         ("Blocked Result", "Store Platform Result"),
     ]
     return workflow("07 YouTube Shorts Publisher", WF["youtube"], nodes, pairs)
+
+
+def publish_path_check_workflow() -> dict:
+    """Runs the real 04/05 publishers for the queue head with validate_only: Page guard, container or
+    Reel session, video upload and processing — but never media_publish / finish, and records nothing."""
+    wf = "pathcheck"
+    note = """## Publish Path Check (no posting)
+
+Calls **04 Instagram Publisher** and **05 Facebook Publisher** for the queue head with `validate_only: true`.
+Instagram: container + resumable upload + wait for FINISHED, **no media_publish** (the container expires unused).
+Facebook: Page token guard + Reel upload session, **never finished** (nothing is published).
+No platform results are recorded.
+"""
+    nodes = [
+        sticky(wf, "Note", note, [-380, -300], 360, 280, 4),
+        node(wf, "Run Manually", "n8n-nodes-base.manualTrigger", 1, {}, [0, 0]),
+        http_get(wf, "Load Queue", f"{TRACKING}/queue", [220, 0]),
+        code(
+            wf,
+            "Pick Queue Head",
+            """
+const q = $json;
+const head = q.head || (q.active || []).find((r) => r.status === 'prepared');
+if (!head) throw new Error('No prepared product in the queue to validate');
+return [{ json: { product_id: head.product_id, filename: head.filename, validate_only: true } }];
+""",
+            [440, 0],
+        ),
+        http_post_json(
+            wf,
+            "Ensure Media",
+            "={{ '" + TRACKING + "/products/' + $json.product_id + '/ensure-media' }}",
+            "={{ JSON.stringify({}) }}",
+            [550, 160],
+        ),
+        code(wf, "Head Job", "return [{ json: $('Pick Queue Head').first().json }];", [600, 0]),
+        execute_sub(wf, "Check Instagram Path", WF["instagram"], "04 Instagram Publisher", [760, 0], continue_on_error=True),
+        code(wf, "Keep Job", "return [{ json: { ...$('Pick Queue Head').first().json, media: $('Ensure Media').first().json, instagram: $json } }];", [880, 0]),
+        execute_sub(wf, "Check Facebook Path", WF["facebook"], "05 Facebook Publisher", [1100, 0], continue_on_error=True),
+        code(
+            wf,
+            "Summarize Check",
+            """
+const job = $('Keep Job').first().json;
+const ig = job.instagram || {};
+const fb = $json || {};
+const ok = (r) => r.status === 'validated' && r.validate_only === true;
+return [{ json: {
+  product_id: job.product_id,
+  filename: job.filename,
+  media_ok: !!(job.media && job.media.ok),
+  media_error: (job.media && job.media.error) || null,
+  instagram_ok: ok(ig),
+  facebook_ok: ok(fb),
+  instagram: { status: ig.status, container_id: ig.container_id || null, status_code: ig.status_code || null, error: ig.error_message || ig.error || null },
+  facebook: { status: fb.status, page_id: fb.page_id || null, page_name: fb.page_name || null, upload_session: fb.upload_session || null, error: fb.error_message || fb.error || null },
+  published_anything: false
+} }];
+""",
+            [1320, 0],
+        ),
+    ]
+    pairs = [
+        ("Run Manually", "Load Queue"),
+        ("Load Queue", "Pick Queue Head"),
+        ("Pick Queue Head", "Ensure Media"),
+        ("Ensure Media", "Head Job"),
+        ("Head Job", "Check Instagram Path"),
+        ("Check Instagram Path", "Keep Job"),
+        ("Keep Job", "Check Facebook Path"),
+        ("Check Facebook Path", "Summarize Check"),
+    ]
+    return workflow("17 Publish Path Check", WF["path_check"], nodes, pairs)
 
 
 def queue_preparer_workflow() -> dict:
@@ -1654,7 +1756,7 @@ def daily_workflow() -> dict:
             "daily",
             "Log Daily Start",
             f"{TRACKING}/logs",
-            "={{ JSON.stringify({ level: 'info', event: 'daily_execution', message: 'Daily publisher started', details: { dry_run: $json.dry_run, timezone: $json.timezone, publish_time: $json.publish_time, ai_provider: $json.ai_provider } }) }}",
+            "={{ JSON.stringify({ level: 'info', event: 'daily_execution', message: 'Daily publisher started', details: { dry_run: $json.dry_run, timezone: $json.timezone, publish_times: $json.publish_times, ai_provider: $json.ai_provider } }) }}",
             [520, 160],
         ),
         http_post_json("daily", "Claim Queue Head", f"{TRACKING}/queue/claim", "={{ JSON.stringify({}) }}", [760, 160]),
@@ -2022,14 +2124,11 @@ Uses YouTube Data API `channels.list?mine=true` (read-only) with **YouTube accou
             """
 const config = $('Load Config').first().json;
 const readiness = $json;
-if (config.dry_run !== true) {
-  throw new Error('Refusing YouTube probe while DRY_RUN is not true.');
-}
 if (String(config.youtube_format || readiness.youtube_format || '') !== 'shorts') {
   throw new Error('youtube_format must be shorts');
 }
 return [{ json: {
-  dry_run: true,
+  dry_run: config.dry_run,
   readiness,
   privacy: config.youtube_privacy_status || 'private',
   note: 'About to call channels.list mine=true — read only, no upload.'
@@ -2126,11 +2225,8 @@ Uses Pinterest API v5 `user_account` + `boards` (read-only) with **Pinterest acc
             """
 const config = $('Load Config').first().json;
 const readiness = $json;
-if (config.dry_run !== true) {
-  throw new Error('Refusing Pinterest probe while DRY_RUN is not true.');
-}
 return [{ json: {
-  dry_run: true,
+  dry_run: config.dry_run,
   readiness,
   board_id_configured: Boolean(String(config.pinterest_board_id || '').trim()),
   note: 'About to call user_account + boards — read only, no Pin create.'
@@ -2867,6 +2963,7 @@ def main() -> None:
         ("14-live-pinterest-video.json", live_pinterest_video_workflow()),
         ("15-live-facebook-reel.json", live_reel_test_workflow(16, ("facebook",), "15 Live Facebook Reel Test", WF["live_fb"])),
         ("16-queue-preparer.json", queue_preparer_workflow()),
+        ("17-publish-path-check.json", publish_path_check_workflow()),
         ("01-daily-publisher.json", daily_workflow()),
         ("02-admin-control.json", admin_workflow()),
     ]

@@ -35,6 +35,13 @@ venv/
 n8n/tmp/
 *.bak
 
+# Production run artifacts (decrypted credentials, state, reports, Pages build)
+.secrets/
+state/
+site/
+reports/
+.tmp/
+
 # Scraped Drive HTML probes (may embed browser keys)
 scripts/_drive_probe*.html
 

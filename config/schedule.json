@@ -1,7 +1,11 @@
 {
-  "publish_time": "09:00",
+  "publish_times": [
+    "18:00",
+    "22:00"
+  ],
   "timezone": "Asia/Kolkata",
-  "queue_size": 3,
-  "updated_at": "2026-10-01T01:31:55+05:30",
-  "updated_by": "dashboard"
+  "buffer_days": 3,
+  "start_date": "2026-10-02",
+  "updated_at": "2026-10-01T02:00:00+05:30",
+  "updated_by": "production go-live: 2 posts/day from 2 Oct 2026"
 }

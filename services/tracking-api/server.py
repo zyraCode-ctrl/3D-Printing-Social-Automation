@@ -39,8 +39,15 @@ LOGS_DIR = Path(os.environ.get("LOGS_DIR", str(ROOT / "logs")))
 HOST = os.environ.get("TRACKING_API_HOST", "0.0.0.0")
 PORT = int(os.environ.get("TRACKING_API_PORT", "8081"))
 SCHEDULE_PATH = Path(os.environ.get("SCHEDULE_PATH", str(CONFIG_PATH.parent / "schedule.json")))
-SCHEDULE_DEFAULTS = {"publish_time": "09:00", "timezone": "Asia/Kolkata", "queue_size": 3}
+SCHEDULE_DEFAULTS: dict[str, Any] = {"publish_times": ["18:00", "22:00"], "timezone": "Asia/Kolkata", "buffer_days": 3, "start_date": None}
 PUBLISH_TIME_RE = re.compile(r"^([01]\d|2[0-3]):([0-5]\d)$")
+SLOT_KEY_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T([01]\d|2[0-3]):[0-5]\d$")
+MAX_PUBLISH_TIMES = 6
+MAX_SLOT_ATTEMPTS = int(os.environ.get("MAX_SLOT_ATTEMPTS", "3"))
+MAX_PRODUCT_ATTEMPTS = int(os.environ.get("MAX_PRODUCT_ATTEMPTS", "3"))
+SLOT_RETRY_SECONDS = int(os.environ.get("SLOT_RETRY_SECONDS", "600"))
+# A slot missed by more than this (PC off, CI outage) is not posted late; the product waits for the next slot.
+SLOT_CATCHUP = timedelta(minutes=int(os.environ.get("SLOT_CATCHUP_MINUTES", "180")))
 SCHEDULER_ENABLED = os.environ.get("SCHEDULER_ENABLED", "true").strip().lower() in {"1", "true", "yes", "on"}
 SCHEDULER_TICK_SECONDS = int(os.environ.get("SCHEDULER_TICK_SECONDS", "30"))
 PREPARE_COOLDOWN_SECONDS = int(os.environ.get("PREPARE_COOLDOWN_SECONDS", "300"))
@@ -93,6 +100,10 @@ def init_db() -> None:
     sql = SCHEMA_PATH.read_text(encoding="utf-8")
     with connect() as conn:
         conn.executescript(sql)
+        columns = {row["name"] for row in conn.execute("PRAGMA table_info(content_queue)")}
+        if "run_slot" not in columns:
+            conn.execute("ALTER TABLE content_queue ADD COLUMN run_slot TEXT")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_queue_slot ON content_queue(run_slot)")
         conn.commit()
 
 
@@ -119,6 +130,20 @@ def get_tz(name: str) -> tzinfo:
         return timezone.utc
 
 
+def normalize_publish_times(value: Any) -> list[str]:
+    """Validate daily publishing times: 1–6 distinct HH:MM values, returned sorted."""
+    items = value.split(",") if isinstance(value, str) else list(value or [])
+    times = sorted({str(item).strip() for item in items if str(item).strip()})
+    if not times:
+        raise ValueError("Add at least one daily publishing time.")
+    if len(times) > MAX_PUBLISH_TIMES:
+        raise ValueError(f"At most {MAX_PUBLISH_TIMES} publishing times per day.")
+    bad = [t for t in times if not PUBLISH_TIME_RE.match(t)]
+    if bad:
+        raise ValueError(f"Times must be HH:MM in 24-hour format (for example 18:00); got {', '.join(bad)}")
+    return times
+
+
 def load_schedule() -> dict[str, Any]:
     data: dict[str, Any] = {}
     if SCHEDULE_PATH.exists():
@@ -126,20 +151,37 @@ def load_schedule() -> dict[str, Any]:
             data = json.loads(SCHEDULE_PATH.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             data = {}
-    schedule = {**SCHEDULE_DEFAULTS, **{k: v for k, v in data.items() if v not in (None, "")}}
-    if not PUBLISH_TIME_RE.match(str(schedule["publish_time"])):
-        schedule["publish_time"] = SCHEDULE_DEFAULTS["publish_time"]
+    raw_times = data.get("publish_times") or ([data["publish_time"]] if data.get("publish_time") else None)
     try:
-        schedule["queue_size"] = max(1, min(int(schedule["queue_size"]), 10))
+        times = normalize_publish_times(raw_times) if raw_times else list(SCHEDULE_DEFAULTS["publish_times"])
+    except ValueError:
+        times = list(SCHEDULE_DEFAULTS["publish_times"])
+    try:
+        buffer_days = max(1, min(int(data.get("buffer_days", SCHEDULE_DEFAULTS["buffer_days"])), 7))
     except (TypeError, ValueError):
-        schedule["queue_size"] = SCHEDULE_DEFAULTS["queue_size"]
-    schedule["source"] = "file" if data else "defaults"
-    return schedule
-
-
-def schedule_cron(schedule: dict[str, Any]) -> str:
-    hour, minute = (int(part) for part in schedule["publish_time"].split(":"))
-    return f"{minute} {hour} * * *"
+        buffer_days = SCHEDULE_DEFAULTS["buffer_days"]
+    start_date = None
+    if data.get("start_date"):
+        try:
+            start_date = date.fromisoformat(str(data["start_date"])).isoformat()
+        except ValueError:
+            start_date = None
+    skip_slots = sorted({str(s) for s in data.get("skip_slots") or [] if SLOT_KEY_RE.match(str(s))})[-30:]
+    return {
+        "publish_times": times,
+        "timezone": str(data.get("timezone") or SCHEDULE_DEFAULTS["timezone"]),
+        "buffer_days": buffer_days,
+        "start_date": start_date,
+        # Slots that must not publish, e.g. a newly added time that had already passed when saved.
+        "skip_slots": skip_slots,
+        # Next day's posts plus `buffer_days` full days, so the buffer never drops below
+        # posts_per_day * buffer_days even right after a post goes out.
+        "queue_size": len(times) * (buffer_days + 1),
+        "min_buffer": len(times) * buffer_days,
+        "updated_at": data.get("updated_at"),
+        "updated_by": data.get("updated_by"),
+        "source": "file" if data else "defaults",
+    }
 
 
 def schedule_now(schedule: dict[str, Any], now: datetime | None = None) -> datetime:
@@ -147,35 +189,62 @@ def schedule_now(schedule: dict[str, Any], now: datetime | None = None) -> datet
     return now.astimezone(tz) if now else datetime.now(tz)
 
 
-def slot_for(schedule: dict[str, Any], day: date) -> datetime:
-    hour, minute = (int(part) for part in schedule["publish_time"].split(":"))
-    return datetime(day.year, day.month, day.day, hour, minute, tzinfo=get_tz(schedule["timezone"]))
+def slot_key(day: date, hhmm: str) -> str:
+    return f"{day.isoformat()}T{hhmm}"
 
 
-def publish_due(schedule: dict[str, Any], last_trigger_date: str | None, now: datetime | None = None) -> bool:
-    """Once per local day, at or after the slot (catches up the same day if the PC was off)."""
+def slot_datetime(schedule: dict[str, Any], key: str) -> datetime:
+    day, hhmm = key.split("T")
+    hour, minute = (int(part) for part in hhmm.split(":"))
+    d = date.fromisoformat(day)
+    return datetime(d.year, d.month, d.day, hour, minute, tzinfo=get_tz(schedule["timezone"]))
+
+
+def day_slots(schedule: dict[str, Any], day: date) -> list[str]:
+    if schedule.get("start_date") and day.isoformat() < schedule["start_date"]:
+        return []
+    return [slot_key(day, t) for t in schedule["publish_times"]]
+
+
+def due_slot(schedule: dict[str, Any], handled: set[str], now: datetime | None = None) -> str | None:
+    """Earliest of today's slots that has started, is not handled and is within the catch-up window."""
     local = schedule_now(schedule, now)
-    return last_trigger_date != local.date().isoformat() and local >= slot_for(schedule, local.date())
+    for key in day_slots(schedule, local.date()):
+        start = slot_datetime(schedule, key)
+        if start <= local < start + SLOT_CATCHUP and key not in handled:
+            return key
+    return None
 
 
-def next_publish_run(schedule: dict[str, Any], last_trigger_date: str | None, now: datetime | None = None) -> dict[str, Any]:
+def upcoming_slots(schedule: dict[str, Any], handled: set[str], count: int, now: datetime | None = None) -> list[dict[str, Any]]:
+    """The next `count` slots that will publish: an overdue slot still due today first, then future ones."""
     local = schedule_now(schedule, now)
-    today_slot = slot_for(schedule, local.date())
-    if last_trigger_date == local.date().isoformat():
-        return {"at": slot_for(schedule, local.date() + timedelta(days=1)).isoformat(), "catch_up": False}
-    if local < today_slot:
-        return {"at": today_slot.isoformat(), "catch_up": False}
-    return {"at": local.isoformat(timespec="seconds"), "catch_up": True}
+    out: list[dict[str, Any]] = []
+    day = local.date()
+    if schedule.get("start_date") and day.isoformat() < schedule["start_date"]:
+        day = date.fromisoformat(schedule["start_date"])
+    for _ in range(60):
+        for key in day_slots(schedule, day):
+            at = slot_datetime(schedule, key)
+            if key in handled or (at <= local and (day != local.date() or local >= at + SLOT_CATCHUP)):
+                continue
+            out.append({"slot": key, "at": at.isoformat(), "due_now": at <= local})
+            if len(out) >= count:
+                return out
+        day += timedelta(days=1)
+    return out
 
 
-def write_schedule(publish_time: str, updated_by: str) -> dict[str, Any]:
-    if not PUBLISH_TIME_RE.match(publish_time or ""):
-        raise ValueError("publish_time must be HH:MM in 24-hour format, for example 18:30")
+def write_schedule(publish_times: Any, updated_by: str, skip_slots: list[str] | None = None) -> dict[str, Any]:
+    times = normalize_publish_times(publish_times)
     current = load_schedule()
+    cutoff = (schedule_now(current).date() - timedelta(days=3)).isoformat()
     doc = {
-        "publish_time": publish_time,
+        "publish_times": times,
         "timezone": current["timezone"],
-        "queue_size": current["queue_size"],
+        "buffer_days": current["buffer_days"],
+        "start_date": current["start_date"],
+        "skip_slots": sorted({s for s in current["skip_slots"] + (skip_slots or []) if s >= cutoff}),
         "updated_at": now_iso(),
         "updated_by": updated_by,
     }
@@ -197,8 +266,7 @@ def runtime_config() -> dict[str, Any]:
         **settings,
         "dry_run": dry_run,
         "use_sample_media": use_sample,
-        "daily_cron": schedule_cron(schedule),
-        "publish_time": schedule["publish_time"],
+        "publish_times": schedule["publish_times"],
         "queue_size": schedule["queue_size"],
         "timezone": schedule["timezone"],
         "google_drive_folder_id": os.environ.get("GOOGLE_DRIVE_FOLDER_ID", "") or settings.get("google_drive_folder_id", ""),
@@ -692,8 +760,9 @@ def select_next(files: list[dict[str, Any]], exclude_ids: set[int] | None = None
         }
     with connect() as conn:
         rows = {row["product_id"]: row_to_dict(row) for row in conn.execute("SELECT * FROM products")}
+        given_up = {r[0] for r in conn.execute("SELECT product_id FROM content_queue WHERE status = 'done' AND last_error LIKE 'Gave up%'")}
         for product_id in sorted(products):
-            if product_id in exclude_ids:
+            if product_id in exclude_ids or product_id in given_up:
                 continue
             record = rows.get(product_id)
             if record and record["overall_status"] == "published":
@@ -1098,22 +1167,37 @@ def local_today() -> str:
     return schedule_now(load_schedule()).date().isoformat()
 
 
-def handled_date() -> str | None:
-    """Local date whose slot is already taken care of (triggered, or deliberately skipped)."""
-    today = local_today()
-    last = get_state("last_publish_trigger_date")
-    return today if today in {last, get_state("publish_skip_date")} else last
+def handled_slots(conn: sqlite3.Connection) -> set[str]:
+    """Slots that must not publish again: posted/being posted, given up after retries, or skipped."""
+    taken = {r[0] for r in conn.execute("SELECT run_slot FROM content_queue WHERE run_slot IS NOT NULL AND status IN ('publishing', 'done')")}
+    attempts = get_state("slot_attempts") or {}
+    exhausted = {k for k, v in attempts.items() if int(v) >= MAX_SLOT_ATTEMPTS}
+    return taken | exhausted | set(get_state("skipped_slots") or []) | set(load_schedule()["skip_slots"])
 
 
-def skip_today_if_slot_passed(reason: str) -> bool:
+def skip_passed_slots_today(reason: str, now: datetime | None = None) -> list[str]:
+    """Mark today's already-started, unhandled slots as skipped (no surprise post right after a change)."""
     schedule = load_schedule()
-    if not publish_due(schedule, handled_date()):
-        return False
-    set_state("publish_skip_date", local_today())
+    local = schedule_now(schedule, now)
     with connect() as conn:
-        log_event(conn, "info", "schedule_skip_today", reason)
+        handled = handled_slots(conn)
+    passed = [k for k in day_slots(schedule, local.date()) if slot_datetime(schedule, k) <= local and k not in handled]
+    if not passed:
+        return []
+    skipped = (get_state("skipped_slots") or []) + passed
+    set_state("skipped_slots", skipped[-60:])
+    with connect() as conn:
+        log_event(conn, "info", "schedule_skip_slots", reason, details={"slots": passed})
         conn.commit()
-    return True
+    return passed
+
+
+def record_slot_attempt(key: str) -> int:
+    attempts = get_state("slot_attempts") or {}
+    attempts[key] = int(attempts.get(key, 0)) + 1
+    recent = dict(sorted(attempts.items())[-60:])
+    set_state("slot_attempts", recent)
+    return recent[key]
 
 
 def mark_prepared(conn: sqlite3.Connection, product_id: int, reused: bool) -> None:
@@ -1141,7 +1225,7 @@ def mark_prepared(conn: sqlite3.Connection, product_id: int, reused: bool) -> No
 
 
 def settle_queue(conn: sqlite3.Connection, product_id: int, overall: str) -> None:
-    row = conn.execute("SELECT status FROM content_queue WHERE product_id = ?", (product_id,)).fetchone()
+    row = conn.execute("SELECT status, claim_count, run_slot FROM content_queue WHERE product_id = ?", (product_id,)).fetchone()
     if row is None:
         return
     if overall in {"published", "previewed"}:
@@ -1149,13 +1233,20 @@ def settle_queue(conn: sqlite3.Connection, product_id: int, overall: str) -> Non
             "UPDATE content_queue SET status = 'done', completed_at = ?, last_error = NULL WHERE product_id = ?",
             (now_iso(), product_id),
         )
-        log_event(conn, "info", "queue_advanced", f"Product {product_id} left the queue ({overall})", product_id=product_id)
+        log_event(conn, "info", "queue_advanced", f"Product {product_id} left the queue ({overall})", product_id=product_id, details={"slot": row["run_slot"]})
+    elif row["status"] == "publishing" and row["claim_count"] >= MAX_PRODUCT_ATTEMPTS:
+        message = f"Gave up after {row['claim_count']} attempts ({overall}); platforms that succeeded are kept, the rest need a manual retry"
+        conn.execute(
+            "UPDATE content_queue SET status = 'done', completed_at = ?, last_error = ? WHERE product_id = ?",
+            (now_iso(), message, product_id),
+        )
+        log_event(conn, "error", "queue_gave_up", f"Product {product_id}: {message}", product_id=product_id, details={"slot": row["run_slot"]})
     elif row["status"] == "publishing":
         conn.execute(
-            "UPDATE content_queue SET status = 'prepared', claimed_at = NULL, last_error = ? WHERE product_id = ?",
-            (f"Publish attempt finished as {overall}; will retry at the next slot", product_id),
+            "UPDATE content_queue SET status = 'prepared', claimed_at = NULL, run_slot = NULL, last_error = ? WHERE product_id = ?",
+            (f"Attempt {row['claim_count']} finished as {overall}; failed platforms are retried", product_id),
         )
-        log_event(conn, "warning", "queue_retry", f"Product {product_id} stays at the head of the queue ({overall})", product_id=product_id)
+        log_event(conn, "warning", "queue_retry", f"Product {product_id} stays at the head of the queue ({overall})", product_id=product_id, details={"slot": row["run_slot"]})
 
 
 def reset_stale_claims(conn: sqlite3.Connection) -> None:
@@ -1167,7 +1258,7 @@ def reset_stale_claims(conn: sqlite3.Connection) -> None:
             claimed = None
         if claimed is None or claimed < cutoff:
             conn.execute(
-                "UPDATE content_queue SET status = 'prepared', claimed_at = NULL, last_error = ? WHERE product_id = ?",
+                "UPDATE content_queue SET status = 'prepared', claimed_at = NULL, run_slot = NULL, last_error = ? WHERE product_id = ?",
                 ("Publish claim expired without a final status", row["product_id"]),
             )
             log_event(conn, "warning", "queue_claim_expired", f"Product {row['product_id']} claim expired; returned to queue", product_id=row["product_id"])
@@ -1221,22 +1312,26 @@ def select_to_prepare(files: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 def claim_next() -> dict[str, Any]:
-    """Hand the queue head to the Daily Publisher: one product per local day in live mode."""
+    """Hand the queue head to the Daily Publisher: exactly one product per due schedule slot in live mode."""
     dry_run = runtime_config()["dry_run"]
+    schedule = load_schedule()
     today = local_today()
     with connect() as conn:
         reset_stale_claims(conn)
-        if not dry_run:
-            posted = conn.execute(
-                "SELECT product_id FROM content_queue WHERE run_date = ? AND status IN ('publishing', 'done') LIMIT 1", (today,)
-            ).fetchone()
-            if posted:
-                conn.commit()
-                return {"found": False, "reason_code": "already_published_today", "reason": f"Product {posted[0]} was already published today ({today}). One product per day.", "product_id": posted[0]}
+        conn.commit()
         busy = conn.execute("SELECT product_id FROM content_queue WHERE status = 'publishing' LIMIT 1").fetchone()
         if busy:
-            conn.commit()
             return {"found": False, "reason_code": "publish_in_progress", "reason": f"Product {busy[0]} is being published right now.", "product_id": busy[0]}
+        slot = due_slot(schedule, handled_slots(conn))
+    if slot is None and not dry_run:
+        upcoming = upcoming_slots(schedule, set(), 1)
+        return {
+            "found": False,
+            "reason_code": "no_slot_due",
+            "reason": "No publishing slot is due right now; live posts only go out at the scheduled times.",
+            "next_slot": upcoming[0] if upcoming else None,
+        }
+    with connect() as conn:
         claimed: tuple[int, dict[str, Any]] | None = None
         rows = conn.execute(
             "SELECT q.product_id, p.overall_status FROM content_queue q JOIN products p ON p.product_id = q.product_id "
@@ -1253,22 +1348,25 @@ def claim_next() -> dict[str, Any]:
                 conn.execute("DELETE FROM content_queue WHERE product_id = ?", (product_id,))
                 log_event(conn, "warning", "queue_content_missing", f"Product {product_id} had no saved content; will be prepared again", product_id=product_id)
                 continue
+            run_date = slot.split("T")[0] if slot else today
             conn.execute(
-                "UPDATE content_queue SET status = 'publishing', claimed_at = ?, run_date = ?, claim_count = claim_count + 1, last_error = NULL WHERE product_id = ?",
-                (now_iso(), today, product_id),
+                "UPDATE content_queue SET status = 'publishing', claimed_at = ?, run_date = ?, run_slot = ?, claim_count = claim_count + 1, last_error = NULL WHERE product_id = ?",
+                (now_iso(), run_date, slot, product_id),
             )
-            log_event(conn, "info", "queue_claimed", f"Product {product_id} taken from the queue for today's post", product_id=product_id, details={"dry_run": dry_run, "run_date": today})
+            log_event(conn, "info", "queue_claimed", f"Product {product_id} taken from the queue" + (f" for slot {slot}" if slot else ""), product_id=product_id, details={"dry_run": dry_run, "slot": slot})
             claimed = (product_id, preview)
             break
         conn.commit()
     if claimed is None:
         return {"found": False, "reason_code": "queue_empty", "reason": "No prepared content in the queue."}
+    if slot is not None:
+        record_slot_attempt(slot)
     product_id, preview = claimed
     media = ensure_media(preview)
     if not media["ok"] and not dry_run:
         with connect() as conn:
             conn.execute(
-                "UPDATE content_queue SET status = 'prepared', claimed_at = NULL, run_date = NULL, last_error = ? WHERE product_id = ?",
+                "UPDATE content_queue SET status = 'prepared', claimed_at = NULL, run_date = NULL, run_slot = NULL, last_error = ? WHERE product_id = ?",
                 (media["error"], product_id),
             )
             log_event(conn, "error", "queue_media_missing", f"Product {product_id} media unavailable: {media['error']}", product_id=product_id)
@@ -1276,7 +1374,16 @@ def claim_next() -> dict[str, Any]:
         return {"found": False, "reason_code": "media_missing", "reason": media["error"], "product_id": product_id}
     with connect() as conn:
         record = row_to_dict(conn.execute("SELECT * FROM products WHERE product_id = ?", (product_id,)).fetchone())
-    return {**preview, "found": True, "product_id": product_id, "record": record, "media_ready": media["ok"], "dry_run": dry_run}
+    return {
+        **preview,
+        "local_path": media.get("path") or preview.get("local_path"),
+        "found": True,
+        "product_id": product_id,
+        "record": record,
+        "media_ready": media["ok"],
+        "dry_run": dry_run,
+        "slot": slot,
+    }
 
 
 def ensure_media(preview: dict[str, Any]) -> dict[str, Any]:
@@ -1306,17 +1413,46 @@ def queue_snapshot() -> dict[str, Any]:
                 "LEFT JOIN products p ON p.product_id = q.product_id ORDER BY q.product_id"
             )
         ]
+        handled = handled_slots(conn)
     active = [r for r in rows if r["status"] in {"prepared", "publishing"}]
     for row in active:
         row["has_preview"] = (PREVIEWS_DIR / f"{row['product_id']}.json").exists()
+    publishing = [r for r in active if r["status"] == "publishing"]
+    prepared = [r for r in active if r["status"] == "prepared"]
+    slots = upcoming_slots(schedule, handled, max(schedule["queue_size"], len(prepared)))
+    planned = [{**slot, "product": prod} for slot, prod in zip(slots, prepared)]
+    planned += [{**slot, "product": None} for slot in slots[len(prepared):]]
+    by_slot = {r["run_slot"]: r for r in rows if r.get("run_slot")}
+    today_posts = []
+    local = schedule_now(schedule)
+    for key in day_slots(schedule, local.date()):
+        row = by_slot.get(key)
+        plan = next((p for p in planned if p["slot"] == key), None)
+        today_posts.append({
+            "slot": key,
+            "at": slot_datetime(schedule, key).isoformat(),
+            "state": (
+                "publishing" if row and row["status"] == "publishing"
+                else "done" if row
+                else "skipped" if key in handled
+                else "missed" if local >= slot_datetime(schedule, key) + SLOT_CATCHUP
+                else "planned"
+            ),
+            "product": row or (plan or {}).get("product"),
+        })
     todays = [r for r in rows if r.get("run_date") == today]
     return {
         "queue_size": schedule["queue_size"],
+        "min_buffer": schedule["min_buffer"],
+        "ready": len(prepared),
+        "buffer_ok": len(prepared) >= schedule["min_buffer"],
         "active": active,
-        "head": next((r for r in active if r["status"] == "prepared"), None),
-        "publishing": next((r for r in active if r["status"] == "publishing"), None),
+        "head": prepared[0] if prepared else None,
+        "publishing": publishing[0] if publishing else None,
+        "planned": planned,
+        "today_posts": today_posts,
         "today": todays[-1] if todays else None,
-        "recent_done": sorted((r for r in rows if r["status"] == "done"), key=lambda r: r.get("completed_at") or "", reverse=True)[:5],
+        "recent_done": sorted((r for r in rows if r["status"] == "done"), key=lambda r: r.get("completed_at") or "", reverse=True)[:8],
     }
 
 
@@ -1540,14 +1676,14 @@ def github_sync_schedule() -> dict[str, Any]:
         sha = remote.get("sha") if status == 200 else None
         if status == 200:
             remote_doc = json.loads(base64.b64decode(remote.get("content", "")).decode("utf-8") or "{}")
-            if all(remote_doc.get(k) == local.get(k) for k in ("publish_time", "timezone", "queue_size")):
-                result.update(ok=True, in_sync=True, message=f"GitHub already uses {local.get('publish_time')} {local.get('timezone')}.")
+            if all(remote_doc.get(k) == local.get(k) for k in ("publish_times", "timezone", "buffer_days", "start_date", "skip_slots")):
+                result.update(ok=True, in_sync=True, message=f"GitHub already uses {', '.join(local.get('publish_times') or [])} {local.get('timezone')}.")
                 set_state("github_sync", result)
                 return result
         elif status != 404:
             raise RuntimeError(f"GitHub GET returned {status}: {remote.get('message')}")
         payload = {
-            "message": f"chore(schedule): daily publish time {local.get('publish_time')} {local.get('timezone')}",
+            "message": f"chore(schedule): daily publish times {', '.join(local.get('publish_times') or [])} {local.get('timezone')}",
             "content": base64.b64encode(local_text.encode("utf-8")).decode("ascii"),
             "branch": branch,
         }
@@ -1556,49 +1692,79 @@ def github_sync_schedule() -> dict[str, Any]:
         status, written = call("PUT", url, payload)
         if status not in {200, 201}:
             raise RuntimeError(f"GitHub PUT returned {status}: {written.get('message')}")
-        result.update(ok=True, in_sync=True, commit=(written.get("commit") or {}).get("sha"), message=f"Pushed {local.get('publish_time')} to GitHub.")
+        result.update(ok=True, in_sync=True, commit=(written.get("commit") or {}).get("sha"), message=f"Pushed {', '.join(local.get('publish_times') or [])} to GitHub.")
     except Exception as exc:
         result.update(ok=False, in_sync=False, message=redact(exc)[:300])
     set_state("github_sync", result)
     return result
 
 
-def save_schedule(publish_time: str, updated_by: str = "dashboard") -> dict[str, Any]:
+def display_12h(hhmm: str) -> str:
+    hour, minute = (int(part) for part in hhmm.split(":"))
+    return f"{(hour % 12) or 12}:{minute:02d} {'AM' if hour < 12 else 'PM'}"
+
+
+def save_schedule(publish_times: Any, updated_by: str = "dashboard") -> dict[str, Any]:
     before = load_schedule()
-    doc = write_schedule(publish_time, updated_by)
+    local = schedule_now(before)
+    now_key = slot_key(local.date(), local.strftime("%H:%M"))
+    new_times = set(normalize_publish_times(publish_times)) - set(before["publish_times"])
+    passed_new = sorted(slot_key(local.date(), t) for t in new_times if slot_key(local.date(), t) <= now_key)
+    doc = write_schedule(publish_times, updated_by, passed_new)
     with connect() as conn:
-        log_event(conn, "info", "schedule_changed", f"Daily publish time set to {publish_time} {doc['timezone']} (was {before['publish_time']})", details={"from": before["publish_time"], "to": publish_time, "by": updated_by})
+        log_event(
+            conn,
+            "info",
+            "schedule_changed",
+            f"Daily publish times set to {', '.join(doc['publish_times'])} {doc['timezone']} (was {', '.join(before['publish_times'])})",
+            details={"from": before["publish_times"], "to": doc["publish_times"], "by": updated_by},
+        )
+        if passed_new:
+            log_event(conn, "info", "schedule_skip_slots", f"{', '.join(passed_new)} already passed today; those times start tomorrow (no surprise post right after saving).")
         conn.commit()
-    if get_state("publish_skip_date") == local_today():
-        set_state("publish_skip_date", None)
-    skip_today_if_slot_passed(f"{publish_time} has already passed today; the next post is tomorrow (no surprise post right after saving).")
     sync = github_sync_schedule()
     return {**schedule_status(), "github_sync": sync}
 
 
 def schedule_status() -> dict[str, Any]:
     schedule = load_schedule()
-    last_date = handled_date()
     local = schedule_now(schedule)
-    hour, minute = (int(part) for part in schedule["publish_time"].split(":"))
-    utc_slot = slot_for(schedule, local.date()).astimezone(timezone.utc)
+    with connect() as conn:
+        handled = handled_slots(conn)
+    upcoming = upcoming_slots(schedule, handled, schedule["queue_size"], local)
     return {
-        "publish_time": schedule["publish_time"],
+        "publish_times": schedule["publish_times"],
+        "display_12h": [display_12h(t) for t in schedule["publish_times"]],
+        "posts_per_day": len(schedule["publish_times"]),
         "timezone": schedule["timezone"],
+        "buffer_days": schedule["buffer_days"],
         "queue_size": schedule["queue_size"],
+        "min_buffer": schedule["min_buffer"],
+        "start_date": schedule["start_date"],
         "source": schedule["source"],
         "updated_at": schedule.get("updated_at"),
         "updated_by": schedule.get("updated_by"),
-        "cron_local": schedule_cron(schedule),
-        "cron_utc_equivalent": f"{utc_slot.minute} {utc_slot.hour} * * *",
         "now_local": local.isoformat(timespec="seconds"),
-        "next_run": next_publish_run(schedule, last_date, local),
-        "last_trigger_date": get_state("last_publish_trigger_date"),
-        "skipped_today": get_state("publish_skip_date") == local.date().isoformat() and get_state("last_publish_trigger_date") != local.date().isoformat(),
+        "due_slot": due_slot(schedule, handled, local),
+        "next_run": upcoming[0] if upcoming else None,
+        "upcoming": upcoming,
         "last_trigger": get_state("last_publish_trigger"),
         "scheduler": {"enabled": SCHEDULER_ENABLED, **(get_state("scheduler_heartbeat") or {})},
         "github_sync": get_state("github_sync"),
-        "display_12h": f"{(hour % 12) or 12}:{minute:02d} {'AM' if hour < 12 else 'PM'}",
+    }
+
+
+def slot_state() -> dict[str, Any]:
+    """Compact slot bookkeeping exported for the GitHub Actions gate."""
+    schedule = load_schedule()
+    with connect() as conn:
+        handled = handled_slots(conn)
+    cutoff = (schedule_now(schedule).date() - timedelta(days=3)).isoformat()
+    return {
+        "handled": sorted(k for k in handled if k >= cutoff),
+        "attempts": {k: v for k, v in (get_state("slot_attempts") or {}).items() if k >= cutoff},
+        "due_slot": due_slot(schedule, handled),
+        "generated_at": now_iso(),
     }
 
 
@@ -1606,7 +1772,7 @@ class Scheduler:
     """Fires the Daily Publisher at the dashboard-selected time and keeps the content queue full."""
 
     def __init__(self) -> None:
-        self.publish_retry_after = 0.0
+        self.slot_retry_after: dict[str, float] = {}
         self.last_prepare_trigger = 0.0
         self.last_sync_attempt = 0.0
 
@@ -1624,26 +1790,26 @@ class Scheduler:
         with connect() as conn:
             reset_stale_claims(conn)
             conn.commit()
-        if publish_due(schedule, handled_date()) and time.time() >= self.publish_retry_after:
-            self.fire_publish(schedule)
+            handled = handled_slots(conn)
+        slot = due_slot(schedule, handled)
+        if slot and time.time() >= self.slot_retry_after.get(slot, 0.0) and not N8N.running(DAILY_WORKFLOW_ID):
+            self.fire_publish(schedule, slot)
         self.maybe_prepare(schedule)
         self.maybe_sync()
         set_state("scheduler_heartbeat", {"at": now_iso(), "ok": True})
 
-    def fire_publish(self, schedule: dict[str, Any]) -> None:
-        today = schedule_now(schedule).date().isoformat()
+    def fire_publish(self, schedule: dict[str, Any], slot: str) -> None:
+        self.slot_retry_after[slot] = time.time() + SLOT_RETRY_SECONDS
         try:
             execution_id = N8N.run_workflow(DAILY_WORKFLOW_ID)
         except Exception as exc:
-            self.publish_retry_after = time.time() + 300
             with connect() as conn:
-                log_event(conn, "error", "scheduled_publish_failed", f"Could not start the Daily Publisher: {redact(exc)}", details={"retry_in_seconds": 300})
+                log_event(conn, "error", "scheduled_publish_failed", f"Could not start the Daily Publisher: {redact(exc)}", details={"slot": slot, "retry_in_seconds": SLOT_RETRY_SECONDS})
                 conn.commit()
             return
-        set_state("last_publish_trigger_date", today)
-        set_state("last_publish_trigger", {"at": now_iso(), "execution_id": execution_id, "publish_time": schedule["publish_time"], "dry_run": runtime_config()["dry_run"]})
+        set_state("last_publish_trigger", {"at": now_iso(), "execution_id": execution_id, "slot": slot, "dry_run": runtime_config()["dry_run"]})
         with connect() as conn:
-            log_event(conn, "info", "scheduled_publish", f"Daily Publisher started for {today} at {schedule['publish_time']} {schedule['timezone']}", details={"execution_id": execution_id})
+            log_event(conn, "info", "scheduled_publish", f"Daily Publisher started for slot {slot} {schedule['timezone']}", details={"execution_id": execution_id, "slot": slot})
             conn.commit()
 
     def maybe_prepare(self, schedule: dict[str, Any]) -> None:
@@ -1740,8 +1906,10 @@ def dashboard_payload() -> dict[str, Any]:
             "gemini_model": cfg.get("gemini_model"),
             "ai_fallback_provider": cfg.get("ai_fallback_provider"),
             "groq_model": cfg.get("groq_model"),
-            "daily_cron": cfg.get("daily_cron"),
+            "publish_times": cfg.get("publish_times"),
             "timezone": cfg.get("timezone"),
+            "facebook_page_id": str(cfg.get("facebook_page_id") or "") or None,
+            "instagram_business_account_id": str(cfg.get("instagram_business_account_id") or "") or None,
             "youtube_privacy_status": cfg.get("youtube_privacy_status"),
             "facebook_page_id_set": bool(str(cfg.get("facebook_page_id") or "").strip()),
             "instagram_account_set": bool(str(cfg.get("instagram_business_account_id") or "").strip()),
@@ -1924,6 +2092,9 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/schedule":
                 self._send(200, schedule_status())
                 return
+            if path == "/schedule/slots":
+                self._send(200, slot_state())
+                return
             if path == "/queue":
                 self._send(200, queue_snapshot())
                 return
@@ -2060,7 +2231,8 @@ class Handler(BaseHTTPRequestHandler):
                 if not self._same_origin():
                     self._send(403, {"error": "Schedule changes are only accepted from the local dashboard."})
                     return
-                self._send(200, save_schedule(str(body.get("publish_time") or "").strip(), "dashboard"))
+                times = body.get("publish_times") or body.get("publish_time") or []
+                self._send(200, save_schedule(times, "dashboard"))
                 return
             if path == "/queue/select-to-prepare":
                 self._send(200, select_to_prepare(body.get("files", [])))
@@ -2070,6 +2242,11 @@ class Handler(BaseHTTPRequestHandler):
                 return
             if path == "/pinterest/s3-upload":
                 self._send(200, pinterest_s3_upload(body))
+                return
+            if path.startswith("/products/") and path.endswith("/ensure-media"):
+                with connect() as conn:
+                    preview = load_preview_for(conn, int(path.split("/")[2]))
+                self._send(200, ensure_media(preview) if preview else {"ok": False, "error": "No saved content for this product."})
                 return
             if path.startswith("/products/") and path.endswith("/reset-preview"):
                 self._send(200, reset_preview(int(path.split("/")[2])))
@@ -2140,10 +2317,12 @@ def main() -> None:
         folder.mkdir(parents=True, exist_ok=True)
     init_db()
     if SCHEDULER_ENABLED:
-        if get_state("last_publish_trigger_date") is None:
-            skip_today_if_slot_passed("Scheduler first start after today's slot; today is treated as already handled to avoid a duplicate post.")
+        if get_state("scheduler_first_start") is None:
+            skip_passed_slots_today("Scheduler first start after some of today's slots; those are treated as handled to avoid a surprise post.")
+            set_state("scheduler_first_start", now_iso())
         threading.Thread(target=Scheduler().run_forever, name="scheduler", daemon=True).start()
-    print(f"Scheduler: {'enabled' if SCHEDULER_ENABLED else 'disabled'} ({load_schedule()['publish_time']} {load_schedule()['timezone']})", flush=True)
+    schedule = load_schedule()
+    print(f"Scheduler: {'enabled' if SCHEDULER_ENABLED else 'disabled'} ({', '.join(schedule['publish_times'])} {schedule['timezone']})", flush=True)
     print(f"Tracking API listening on {HOST}:{PORT}", flush=True)
     print(f"SQLite database: {DB_PATH}", flush=True)
     ThreadingHTTPServer((HOST, PORT), Handler).serve_forever()

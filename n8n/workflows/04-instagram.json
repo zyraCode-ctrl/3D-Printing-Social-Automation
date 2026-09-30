@@ -10,13 +10,13 @@
       "type": "n8n-nodes-base.stickyNote",
       "typeVersion": 1,
       "position": [
-        -360,
-        -240
+        -380,
+        -300
       ],
       "parameters": {
-        "content": "## Instagram (official Meta Graph API)\n\nUses Facebook Login + Instagram professional account linked to a Page.\n\nFlow (only when DRY_RUN=false):\n1. Create media container `POST /{ig-user-id}/media`\n2. Publish container `POST /{ig-user-id}/media_publish`\n\nRequires:\n- n8n credential **Facebook Graph account** (Page access token)\n- `INSTAGRAM_BUSINESS_ACCOUNT_ID` and `META_GRAPH_VERSION` in `.env`\n- Publicly reachable media URL (Drive share / tunnel) for live posts\n\n`DRY_RUN=true` stops at Duplicate Check \u2014 nothing is posted.\n",
+        "content": "## Instagram (official Meta Graph API)\n\nPosts as the Instagram professional account linked to `FACEBOOK_PAGE_ID`, using that Page's token.\n\nVideo products (Reels): resumable upload of the local file (no public URL needed)\n\u2192 wait until the container is `FINISHED` \u2192 `media_publish`.\nImage products: container from `image_url` \u2192 wait \u2192 `media_publish`.\n\n`DRY_RUN=true` stops at Duplicate Check \u2014 nothing is posted. Already-published products are never re-posted.\n",
         "width": 360,
-        "height": 340,
+        "height": 300,
         "color": 4
       }
     },
@@ -56,7 +56,7 @@
       "type": "n8n-nodes-base.if",
       "typeVersion": 2.3,
       "position": [
-        500,
+        480,
         0
       ],
       "parameters": {
@@ -70,7 +70,7 @@
           "conditions": [
             {
               "id": "d08ad3a2-7384-5eed-9f44-682eacaa234c",
-              "leftValue": "={{ $json.allowed }}",
+              "leftValue": "={{ $json.allowed || ($('When Called by Another Workflow').first().json.validate_only === true) }}",
               "rightValue": true,
               "operator": {
                 "type": "boolean",
@@ -90,8 +90,8 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        760,
-        220
+        720,
+        260
       ],
       "parameters": {
         "jsCode": "const job = $('When Called by Another Workflow').first().json;\nconst check = $json;\nreturn [{ json: {\n  product_id: job.product_id,\n  platform: 'instagram',\n  status: check.dry_run ? 'dry_run_skipped' : (check.status === 'published' ? 'published' : 'skipped'),\n  skipped: true,\n  reason: check.reason,\n  post_id: check.post_id || null\n} }];\n"
@@ -103,7 +103,7 @@
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.5,
       "position": [
-        760,
+        720,
         -120
       ],
       "parameters": {
@@ -120,7 +120,7 @@
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.5,
       "position": [
-        980,
+        920,
         -120
       ],
       "parameters": {
@@ -129,7 +129,26 @@
         "options": {
           "timeout": 60000
         }
-      }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "ca3bb919-78d7-5cb4-8128-cd166e7be40f",
+      "name": "Media Size",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        1120,
+        -120
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "={{ 'http://tracking-api:8081/media/size?name=' + encodeURIComponent(String(($json && $json.filename) || $('When Called by Another Workflow').first().json.filename || '').split('/').pop()) }}",
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "onError": "continueRegularOutput"
     },
     {
       "id": "8427f0a6-706d-50b8-9831-5f80444fc94b",
@@ -137,63 +156,20 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        1220,
+        1320,
         -120
       ],
       "parameters": {
-        "jsCode": "const job = $('When Called by Another Workflow').first().json;\nconst config = $('Load Config').first().json;\nconst preview = $json;\nconst content = (preview && preview.content) || job.content || {};\nconst ig = content.instagram || {};\nif (!config.instagram_business_account_id) {\n  throw new Error('INSTAGRAM_BUSINESS_ACCOUNT_ID is missing in .env / tracking config.');\n}\nconst caption = [ig.caption, (ig.hashtags || []).join(' '), ig.cta].filter(Boolean).join('\\n\\n');\nconst driveId = preview.drive_file_id || job.drive_file_id || null;\nconst publicUrl = job.public_media_url\n  || (driveId ? ('https://drive.google.com/uc?export=download&id=' + driveId) : null);\nif (!publicUrl) {\n  throw new Error('No public_media_url / drive_file_id available for Instagram Graph publishing.');\n}\nconst isImage = String(preview.media_type || job.media_type || '') === 'image'\n  || Boolean(job.image_file && !job.video_file);\nconst version = config.meta_graph_version || 'v22.0';\nconst igUser = config.instagram_business_account_id;\nconst containerBody = isImage\n  ? { image_url: publicUrl, caption }\n  : { media_type: 'REELS', video_url: publicUrl, caption };\nreturn [{ json: {\n  product_id: job.product_id,\n  platform: 'instagram',\n  config,\n  preview,\n  content,\n  caption,\n  public_media_url: publicUrl,\n  drive_file_id: driveId,\n  is_image: isImage,\n  container_url: 'https://graph.facebook.com/' + version + '/' + igUser + '/media',\n  publish_url: 'https://graph.facebook.com/' + version + '/' + igUser + '/media_publish',\n  container_body: containerBody\n} }];\n"
+        "jsCode": "const job = $('When Called by Another Workflow').first().json;\nconst config = $('Load Config').first().json;\nconst loaded = $('Load Preview').first().json;\nconst preview = loaded && !loaded.error ? loaded : {};\nconst size = $('Media Size').first().json;\nconst content = preview.content || job.content || {};\nconst filename = String(preview.filename || job.filename || '');\nconst isVideo = /\\.(mp4|mov)$/i.test(filename);\nconst driveId = preview.drive_file_id || job.drive_file_id || null;\nconst imageUrl = job.public_media_url || (driveId ? ('https://drive.google.com/uc?export=download&id=' + driveId) : null);\nconst join = (b) => [b.caption, (b.hashtags || []).join(' '), b.cta].filter(Boolean).join('\\n\\n');\nlet error = null;\nif (!config.facebook_page_id) error = 'FACEBOOK_PAGE_ID is missing in .env';\nelse if (isVideo && !(size && size.bytes)) error = 'Local video file not found for Product ' + job.product_id + ' (' + filename + ')';\nelse if (!isVideo && !imageUrl) error = 'No image URL / Drive file id for Product ' + job.product_id;\nconst base = {\n  product_id: job.product_id,\n  version: config.meta_graph_version || 'v22.0',\n  page_id: String(config.facebook_page_id || ''),\n  is_video: isVideo,\n  local_path: size && size.path ? size.path : null,\n  file_size: size && size.bytes ? size.bytes : 0,\n  image_url: imageUrl,\n  error\n};\n\nconst ig = content.instagram || {};\nif (!error && !config.instagram_business_account_id) base.error = 'INSTAGRAM_BUSINESS_ACCOUNT_ID is missing in .env';\nconst caption = join(ig);\nreturn [{ json: {\n  ...base,\n  platform: 'instagram',\n  ig_user_id: config.instagram_business_account_id,\n  container_body: isVideo\n    ? { media_type: 'REELS', upload_type: 'resumable', share_to_feed: true, caption }\n    : { image_url: imageUrl, caption }\n} }];\n"
       }
     },
     {
-      "id": "b867a71b-d563-588d-aa26-9e91d9085fb4",
-      "name": "Create Media Container",
-      "type": "n8n-nodes-base.httpRequest",
-      "typeVersion": 4.5,
-      "position": [
-        1480,
-        -120
-      ],
-      "parameters": {
-        "method": "POST",
-        "url": "={{ $json.container_url }}",
-        "authentication": "predefinedCredentialType",
-        "nodeCredentialType": "facebookGraphApi",
-        "sendBody": true,
-        "contentType": "raw",
-        "rawContentType": "application/json",
-        "body": "={{ JSON.stringify($json.container_body) }}",
-        "options": {
-          "timeout": 180000
-        }
-      },
-      "credentials": {
-        "facebookGraphApi": {
-          "id": "facebookGraphApi",
-          "name": "Facebook Graph account"
-        }
-      },
-      "onError": "continueRegularOutput"
-    },
-    {
-      "id": "1b8f8c63-dcb2-561b-b525-ff5f584f8d2b",
-      "name": "Build Publish Body",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [
-        1720,
-        -120
-      ],
-      "parameters": {
-        "jsCode": "const prepared = $('Prepare Instagram Job').first().json;\nconst created = $json;\nif (created.error) {\n  return [{ json: {\n    product_id: prepared.product_id,\n    platform: 'instagram',\n    status: 'failed',\n    error_message: created.error.message || JSON.stringify(created.error),\n    skip_publish: true\n  } }];\n}\nconst creationId = created.id || created.creation_id;\nif (!creationId) {\n  return [{ json: {\n    product_id: prepared.product_id,\n    platform: 'instagram',\n    status: 'failed',\n    error_message: 'Instagram container create returned no id: ' + JSON.stringify(created).slice(0, 400),\n    skip_publish: true\n  } }];\n}\nreturn [{ json: {\n  ...prepared,\n  creation_id: creationId,\n  skip_publish: false,\n  publish_body: { creation_id: creationId }\n} }];\n"
-      }
-    },
-    {
-      "id": "0dbdfb75-7797-54a0-81fe-c4219ee67b92",
-      "name": "Container OK?",
+      "id": "f3114799-8139-5da6-abac-0d2e1cbcc28a",
+      "name": "Job Ready?",
       "type": "n8n-nodes-base.if",
       "typeVersion": 2.3,
       "position": [
-        1960,
+        1520,
         -120
       ],
       "parameters": {
@@ -206,8 +182,8 @@
           },
           "conditions": [
             {
-              "id": "2a121bad-dc8a-53a3-ab24-6faa09524aba",
-              "leftValue": "={{ !$json.skip_publish }}",
+              "id": "d7486eb6-c939-5c41-9415-8ddbe8caa4ae",
+              "leftValue": "={{ !$json.error }}",
               "rightValue": true,
               "operator": {
                 "type": "boolean",
@@ -222,25 +198,21 @@
       }
     },
     {
-      "id": "ac3523bf-1a31-583f-a6ae-31dd04ddedbc",
-      "name": "Publish Media Container",
+      "id": "4b3a605d-f41e-57b2-9e6f-bfd442489d5e",
+      "name": "Get Page Token",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.5,
       "position": [
-        2200,
-        -200
+        1720,
+        -120
       ],
       "parameters": {
-        "method": "POST",
-        "url": "={{ $json.publish_url }}",
+        "method": "GET",
+        "url": "={{ 'https://graph.facebook.com/' + ($('Prepare Instagram Job').first().json.version || 'v22.0') + '/' + $('Prepare Instagram Job').first().json.page_id + '?fields=id,name,access_token' }}",
         "authentication": "predefinedCredentialType",
         "nodeCredentialType": "facebookGraphApi",
-        "sendBody": true,
-        "contentType": "raw",
-        "rawContentType": "application/json",
-        "body": "={{ JSON.stringify($json.publish_body) }}",
         "options": {
-          "timeout": 180000
+          "timeout": 60000
         }
       },
       "credentials": {
@@ -252,17 +224,470 @@
       "onError": "continueRegularOutput"
     },
     {
+      "id": "e2b82531-db12-5d56-b905-d158a89c8ce3",
+      "name": "Verify Page Identity",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        1900,
+        -120
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "={{ 'https://graph.facebook.com/' + ($('Prepare Instagram Job').first().json.version || 'v22.0') + '/me?fields=id,name' }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "={{ 'OAuth ' + ($('Get Page Token').first().json.access_token || 'missing') }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "ea116d00-c055-59a3-aed4-ccaf8ea93629",
+      "name": "Page Guard",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2080,
+        -120
+      ],
+      "parameters": {
+        "jsCode": "const expected = String($('Prepare Instagram Job').first().json.page_id || '');\nconst page = $('Get Page Token').first().json;\nconst me = $json;\nconst errText = (r) => r && r.error ? String(r.error.description || r.error.message || JSON.stringify(r.error)).slice(0, 300) : null;\nlet error = null;\nif (!expected) error = 'FACEBOOK_PAGE_ID is not configured';\nelse if (errText(page)) error = 'Cannot read Page ' + expected + ': ' + errText(page);\nelse if (String(page.id) !== expected) error = 'Page lookup returned ' + page.id + ', expected ' + expected;\nelse if (!page.access_token) error = 'No Page access token for ' + expected + ' (grant pages_show_list / pages_manage_posts for this Page)';\nelse if (errText(me)) error = 'Page token check failed: ' + errText(me);\nelse if (String(me.id) !== expected) error = 'Token acts as ' + me.name + ' (' + me.id + '), not Page ' + expected;\nreturn [{ json: { guard_ok: !error, error, page_id: expected, page_name: page.name || null } }];\n"
+      }
+    },
+    {
+      "id": "0187c8a3-7dd9-5a6b-afa6-d29e06fe6f21",
+      "name": "Page Verified?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        2280,
+        -120
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "5d4f3f7f-7411-56cf-a5b6-d1968e63eac9",
+              "leftValue": "={{ $json.guard_ok }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "6db9a055-abcb-5dfb-8099-417ecca285ee",
+      "name": "IG Create Container",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        2480,
+        -120
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ 'https://graph.facebook.com/' + $('Prepare Instagram Job').first().json.version + '/' + $('Prepare Instagram Job').first().json.ig_user_id + '/media' }}",
+        "options": {
+          "timeout": 180000
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "={{ 'OAuth ' + ($('Get Page Token').first().json.access_token || 'missing') }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ JSON.stringify($('Prepare Instagram Job').first().json.container_body) }}"
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "e5f527f9-31b7-5fd7-9615-76866b713f46",
+      "name": "Upload Video?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        2680,
+        -120
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "24ccdfc8-597a-5bef-829b-fc8ae3606755",
+              "leftValue": "={{ $('Prepare Instagram Job').first().json.is_video && Boolean($json.id) }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "1c596eec-22b1-5c1f-a548-b12e85fa10c5",
+      "name": "Read Video",
+      "type": "n8n-nodes-base.readWriteFile",
+      "typeVersion": 1,
+      "position": [
+        2880,
+        -240
+      ],
+      "parameters": {
+        "operation": "read",
+        "fileSelector": "={{ $('Prepare Instagram Job').first().json.local_path }}",
+        "options": {
+          "dataPropertyName": "data"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "13b091cf-e291-5bac-b8c1-16560c95ba34",
+      "name": "IG Upload",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        3080,
+        -240
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ 'https://rupload.facebook.com/ig-api-upload/' + $('Prepare Instagram Job').first().json.version + '/' + $('IG Create Container').first().json.id }}",
+        "options": {
+          "timeout": 300000
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "={{ 'OAuth ' + ($('Get Page Token').first().json.access_token || 'missing') }}"
+            },
+            {
+              "name": "offset",
+              "value": "0"
+            },
+            {
+              "name": "file_size",
+              "value": "={{ String($('Prepare Instagram Job').first().json.file_size) }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "binaryData",
+        "inputDataFieldName": "data"
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "9c28fbec-57ea-5a9c-b01d-d12a0ad8fe72",
+      "name": "IG Check Status",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        3280,
+        -120
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "={{ 'https://graph.facebook.com/' + $('Prepare Instagram Job').first().json.version + '/' + ($('IG Create Container').first().json.id || 'missing') + '?fields=status_code,status' }}",
+        "options": {
+          "timeout": 60000
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "={{ 'OAuth ' + ($('Get Page Token').first().json.access_token || 'missing') }}"
+            }
+          ]
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "fd790f56-a867-56b1-80c3-ea9b6eeedce6",
+      "name": "IG Status Gate",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3480,
+        -120
+      ],
+      "parameters": {
+        "jsCode": "const errText = (r) => r && r.error ? String(r.error.description || r.error.message || JSON.stringify(r.error)).slice(0, 400) : null;\nconst get = (n) => { try { return $(n).last().json; } catch (e) { return null; } };\n\nconst created = $('IG Create Container').first().json;\nconst upload = get('IG Upload');\nconst status = $json;\nconst attempt = $runIndex;\nconst firstErr = errText(created) || (created.id ? null : 'Container create returned no id') || errText(upload) || errText(status);\nif (firstErr) return [{ json: { state: 'fail', error: firstErr } }];\nconst code = String(status.status_code || '');\nif (code === 'FINISHED') return [{ json: { state: 'ready', attempt } }];\nif (code === 'ERROR' || code === 'EXPIRED') return [{ json: { state: 'fail', error: 'Instagram processing ' + code + ': ' + (status.status || '') } }];\nif (attempt >= 30) return [{ json: { state: 'fail', error: 'Instagram processing timed out (' + code + ')' } }];\nreturn [{ json: { state: 'wait', attempt, status_code: code } }];\n"
+      }
+    },
+    {
+      "id": "df9c6e2e-3ea5-51a4-b620-309aee6d2cd9",
+      "name": "IG Ready?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        3680,
+        -120
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "6ec2b112-6cb7-538a-9472-62aab1a43749",
+              "leftValue": "={{ $json.state }}",
+              "rightValue": "ready",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "8266852b-c63e-5685-902e-46ee6eebda38",
+      "name": "Publish Allowed?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        3780,
+        -320
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "91c7ec33-1478-57d6-b2e0-dc3be32eb32f",
+              "leftValue": "={{ !($('When Called by Another Workflow').first().json.validate_only === true) }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "54e8c04b-0811-500e-aafa-30ca88562025",
+      "name": "IG Keep Waiting?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        3680,
+        100
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "324b83a5-9154-5c30-a40a-4f5cfa611a5a",
+              "leftValue": "={{ $json.state }}",
+              "rightValue": "wait",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "785aebd7-82ae-5f8e-81b8-bc88802a2ecb",
+      "name": "IG Wait",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        3880,
+        200
+      ],
+      "parameters": {
+        "resume": "timeInterval",
+        "amount": 10,
+        "unit": "seconds"
+      }
+    },
+    {
+      "id": "e33a32a9-e752-5cd8-b3c4-1ea263090575",
+      "name": "IG Publish",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        3880,
+        -220
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ 'https://graph.facebook.com/' + $('Prepare Instagram Job').first().json.version + '/' + $('Prepare Instagram Job').first().json.ig_user_id + '/media_publish' }}",
+        "options": {
+          "timeout": 180000
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "={{ 'OAuth ' + ($('Get Page Token').first().json.access_token || 'missing') }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ JSON.stringify({ creation_id: $('IG Create Container').first().json.id }) }}"
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "1465f96f-1f8e-5ccf-b65e-3219ce264ba0",
+      "name": "IG Permalink",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        4080,
+        -220
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "={{ 'https://graph.facebook.com/' + $('Prepare Instagram Job').first().json.version + '/' + ($json.id || 'missing') + '?fields=id,permalink' }}",
+        "options": {
+          "timeout": 60000
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "={{ 'OAuth ' + ($('Get Page Token').first().json.access_token || 'missing') }}"
+            }
+          ]
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
       "id": "420c6ea5-4d0c-5c67-a54c-3ef0c3eca9b5",
       "name": "Interpret Result",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        2440,
+        4280,
         -120
       ],
       "parameters": {
-        "jsCode": "const prepared = $('Prepare Instagram Job').first().json;\nconst built = $('Build Publish Body').first().json;\nconst response = $json;\nif (built.skip_publish) {\n  return [{ json: {\n    product_id: prepared.product_id,\n    platform: 'instagram',\n    status: 'failed',\n    error_message: built.error_message || 'container create failed'\n  } }];\n}\nif (response.error) {\n  return [{ json: {\n    product_id: prepared.product_id,\n    platform: 'instagram',\n    status: 'failed',\n    error_message: response.error.message || JSON.stringify(response.error)\n  } }];\n}\nconst postId = response.id || response.post_id || null;\nif (!postId) {\n  return [{ json: {\n    product_id: prepared.product_id,\n    platform: 'instagram',\n    status: 'failed',\n    error_message: 'No Instagram media id in publish response: ' + JSON.stringify(response).slice(0, 400)\n  } }];\n}\nreturn [{ json: {\n  product_id: prepared.product_id,\n  platform: 'instagram',\n  status: 'published',\n  post_id: String(postId)\n} }];\n"
+        "jsCode": "const errText = (r) => r && r.error ? String(r.error.description || r.error.message || JSON.stringify(r.error)).slice(0, 400) : null;\nconst get = (n) => { try { return $(n).last().json; } catch (e) { return null; } };\nconst validateOnly = $('When Called by Another Workflow').first().json.validate_only === true;\n\nconst prep = get('Prepare Instagram Job');\nconst base = { product_id: prep.product_id, platform: 'instagram' };\nconst fail = (msg) => [{ json: { ...base, status: 'failed', error_message: String(msg || 'unknown error').slice(0, 500) } }];\nif (prep.error) return fail(prep.error);\nconst guard = get('Page Guard');\nif (!guard || !guard.guard_ok) return fail('Not posted: ' + ((guard && guard.error) || 'Page check failed'));\nconst gate = get('IG Status Gate');\nif (!gate) return fail(errText(get('IG Create Container')) || 'Instagram container was not created');\nif (gate.state !== 'ready') return fail(gate.error);\nif (validateOnly) return [{ json: { ...base, status: 'validated', validate_only: true, container_id: String(get('IG Create Container').id), status_code: 'FINISHED', is_video: prep.is_video, checks: gate.attempt + 1 } }];\nconst pub = get('IG Publish');\nif (!pub || errText(pub) || !pub.id) return fail(errText(pub) || 'media_publish returned no id');\nconst link = get('IG Permalink');\nreturn [{ json: { ...base, status: 'published', post_id: String(pub.id), url: (link && link.permalink) || null } }];\n"
       }
+    },
+    {
+      "id": "193595e5-c13a-5408-9d59-35d41180353e",
+      "name": "Record Result?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        4380,
+        -120
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "9b4b1ae4-79c2-5f61-9f51-703f24d387e3",
+              "leftValue": "={{ !($('When Called by Another Workflow').first().json.validate_only === true) }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "0925a125-2975-57fa-89a9-4b0b7cf2a1bf",
+      "name": "Validation Result",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        4580,
+        -260
+      ],
+      "parameters": {}
     },
     {
       "id": "6e57e74f-b8d8-53df-8417-353d6d5ff35d",
@@ -270,7 +695,7 @@
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.5,
       "position": [
-        2680,
+        4480,
         40
       ],
       "parameters": {
@@ -341,6 +766,17 @@
       "main": [
         [
           {
+            "node": "Media Size",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Media Size": {
+      "main": [
+        [
+          {
             "node": "Prepare Instagram Job",
             "type": "main",
             "index": 0
@@ -352,40 +788,18 @@
       "main": [
         [
           {
-            "node": "Create Media Container",
+            "node": "Job Ready?",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Create Media Container": {
+    "Job Ready?": {
       "main": [
         [
           {
-            "node": "Build Publish Body",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Build Publish Body": {
-      "main": [
-        [
-          {
-            "node": "Container OK?",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Container OK?": {
-      "main": [
-        [
-          {
-            "node": "Publish Media Container",
+            "node": "Get Page Token",
             "type": "main",
             "index": 0
           }
@@ -399,7 +813,207 @@
         ]
       ]
     },
-    "Publish Media Container": {
+    "Get Page Token": {
+      "main": [
+        [
+          {
+            "node": "Verify Page Identity",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Verify Page Identity": {
+      "main": [
+        [
+          {
+            "node": "Page Guard",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Page Guard": {
+      "main": [
+        [
+          {
+            "node": "Page Verified?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Page Verified?": {
+      "main": [
+        [
+          {
+            "node": "IG Create Container",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Interpret Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IG Create Container": {
+      "main": [
+        [
+          {
+            "node": "Upload Video?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Upload Video?": {
+      "main": [
+        [
+          {
+            "node": "Read Video",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "IG Check Status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Video": {
+      "main": [
+        [
+          {
+            "node": "IG Upload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IG Upload": {
+      "main": [
+        [
+          {
+            "node": "IG Check Status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IG Check Status": {
+      "main": [
+        [
+          {
+            "node": "IG Status Gate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IG Status Gate": {
+      "main": [
+        [
+          {
+            "node": "IG Ready?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IG Ready?": {
+      "main": [
+        [
+          {
+            "node": "Publish Allowed?",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "IG Keep Waiting?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Publish Allowed?": {
+      "main": [
+        [
+          {
+            "node": "IG Publish",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Interpret Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IG Keep Waiting?": {
+      "main": [
+        [
+          {
+            "node": "IG Wait",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Interpret Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IG Wait": {
+      "main": [
+        [
+          {
+            "node": "IG Check Status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IG Publish": {
+      "main": [
+        [
+          {
+            "node": "IG Permalink",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IG Permalink": {
       "main": [
         [
           {
@@ -414,7 +1028,25 @@
       "main": [
         [
           {
+            "node": "Record Result?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Record Result?": {
+      "main": [
+        [
+          {
             "node": "Store Platform Result",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Validation Result",
             "type": "main",
             "index": 0
           }

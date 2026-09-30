@@ -10,13 +10,13 @@
       "type": "n8n-nodes-base.stickyNote",
       "typeVersion": 1,
       "position": [
-        -360,
-        -240
+        -380,
+        -300
       ],
       "parameters": {
-        "content": "## Facebook Page (official Meta Graph API)\n\nPublishes to a Page:\n- Images: `POST /{page-id}/photos`\n- Videos: `POST /{page-id}/videos`\n\nPage-only guard: fetches the Page token for `FACEBOOK_PAGE_ID`, checks `GET /me` with that\ntoken returns the same Page id, posts with the Page token, then verifies the post `from.id`.\nNever posts as a personal profile.\n\nRequires:\n- n8n credential **Facebook Graph account** (user or Page token that can read the Page `access_token`, with `pages_manage_posts`)\n- `FACEBOOK_PAGE_ID` and `META_GRAPH_VERSION` in `.env`\n\n`DRY_RUN=true` stops at Duplicate Check \u2014 nothing is posted.\n",
+        "content": "## Facebook Page (official Meta Graph API)\n\nPosts only to the Page `FACEBOOK_PAGE_ID`, never a personal profile:\nPage token for that Page \u2192 `GET /me` must return the same Page id \u2192 post \u2192 verify `from.id`.\n\nVideo products: Page Reel (`video_reels` start \u2192 upload local file \u2192 finish PUBLISHED).\nImage products: `POST /{page-id}/photos`.\n\n`DRY_RUN=true` stops at Duplicate Check \u2014 nothing is posted. Already-published products are never re-posted.\n",
         "width": 360,
-        "height": 320,
+        "height": 300,
         "color": 4
       }
     },
@@ -56,7 +56,7 @@
       "type": "n8n-nodes-base.if",
       "typeVersion": 2.3,
       "position": [
-        500,
+        480,
         0
       ],
       "parameters": {
@@ -70,7 +70,7 @@
           "conditions": [
             {
               "id": "3e4726eb-e9ae-5c17-9226-e7f40c106692",
-              "leftValue": "={{ $json.allowed }}",
+              "leftValue": "={{ $json.allowed || ($('When Called by Another Workflow').first().json.validate_only === true) }}",
               "rightValue": true,
               "operator": {
                 "type": "boolean",
@@ -90,8 +90,8 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        760,
-        220
+        720,
+        260
       ],
       "parameters": {
         "jsCode": "const job = $('When Called by Another Workflow').first().json;\nconst check = $json;\nreturn [{ json: {\n  product_id: job.product_id,\n  platform: 'facebook',\n  status: check.dry_run ? 'dry_run_skipped' : (check.status === 'published' ? 'published' : 'skipped'),\n  skipped: true,\n  reason: check.reason,\n  post_id: check.post_id || null\n} }];\n"
@@ -103,7 +103,7 @@
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.5,
       "position": [
-        760,
+        720,
         -120
       ],
       "parameters": {
@@ -120,7 +120,7 @@
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.5,
       "position": [
-        980,
+        920,
         -120
       ],
       "parameters": {
@@ -129,7 +129,26 @@
         "options": {
           "timeout": 60000
         }
-      }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "074942ff-a3ab-5d72-ac9c-2dfcd748483e",
+      "name": "Media Size",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        1120,
+        -120
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "={{ 'http://tracking-api:8081/media/size?name=' + encodeURIComponent(String(($json && $json.filename) || $('When Called by Another Workflow').first().json.filename || '').split('/').pop()) }}",
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "onError": "continueRegularOutput"
     },
     {
       "id": "bd0487b5-cc65-5b20-b455-1f2af4d6034b",
@@ -137,11 +156,45 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        1220,
+        1320,
         -120
       ],
       "parameters": {
-        "jsCode": "const job = $('When Called by Another Workflow').first().json;\nconst config = $('Load Config').first().json;\nconst preview = $json;\nconst content = (preview && preview.content) || job.content || {};\nconst fb = content.facebook || {};\nif (!config.facebook_page_id) {\n  throw new Error('FACEBOOK_PAGE_ID is missing in .env / tracking config.');\n}\nconst message = [fb.caption, (fb.hashtags || []).join(' '), fb.cta].filter(Boolean).join('\\n\\n');\nconst driveId = preview.drive_file_id || job.drive_file_id || null;\nconst publicUrl = job.public_media_url\n  || (driveId ? ('https://drive.google.com/uc?export=download&id=' + driveId) : null);\nif (!publicUrl) {\n  throw new Error('No public_media_url / drive_file_id available for Facebook Graph publishing.');\n}\nconst isVideo = String(preview.media_type || job.media_type || '') === 'video'\n  || Boolean(job.video_file && !job.image_file)\n  || String(preview.media_type || '') === 'both';\nconst version = config.meta_graph_version || 'v22.0';\nconst pageId = config.facebook_page_id;\nconst edge = isVideo ? 'videos' : 'photos';\nconst body = isVideo\n  ? { description: message, file_url: publicUrl }\n  : { caption: message, url: publicUrl };\nreturn [{ json: {\n  product_id: job.product_id,\n  platform: 'facebook',\n  config,\n  preview,\n  content,\n  public_media_url: publicUrl,\n  drive_file_id: driveId,\n  publish_url: 'https://graph.facebook.com/' + version + '/' + pageId + '/' + edge,\n  publish_body: body\n} }];\n"
+        "jsCode": "const job = $('When Called by Another Workflow').first().json;\nconst config = $('Load Config').first().json;\nconst loaded = $('Load Preview').first().json;\nconst preview = loaded && !loaded.error ? loaded : {};\nconst size = $('Media Size').first().json;\nconst content = preview.content || job.content || {};\nconst filename = String(preview.filename || job.filename || '');\nconst isVideo = /\\.(mp4|mov)$/i.test(filename);\nconst driveId = preview.drive_file_id || job.drive_file_id || null;\nconst imageUrl = job.public_media_url || (driveId ? ('https://drive.google.com/uc?export=download&id=' + driveId) : null);\nconst join = (b) => [b.caption, (b.hashtags || []).join(' '), b.cta].filter(Boolean).join('\\n\\n');\nlet error = null;\nif (!config.facebook_page_id) error = 'FACEBOOK_PAGE_ID is missing in .env';\nelse if (isVideo && !(size && size.bytes)) error = 'Local video file not found for Product ' + job.product_id + ' (' + filename + ')';\nelse if (!isVideo && !imageUrl) error = 'No image URL / Drive file id for Product ' + job.product_id;\nconst base = {\n  product_id: job.product_id,\n  version: config.meta_graph_version || 'v22.0',\n  page_id: String(config.facebook_page_id || ''),\n  is_video: isVideo,\n  local_path: size && size.path ? size.path : null,\n  file_size: size && size.bytes ? size.bytes : 0,\n  image_url: imageUrl,\n  error\n};\n\nreturn [{ json: { ...base, platform: 'facebook', message: join(content.facebook || {}) } }];\n"
+      }
+    },
+    {
+      "id": "ba087dd7-33af-51e8-8f4b-7c89e351ee55",
+      "name": "Job Ready?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        1520,
+        -120
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "1e741a51-dbdf-5f42-9fc0-3dc7952a8759",
+              "leftValue": "={{ !$json.error }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
       }
     },
     {
@@ -150,12 +203,12 @@
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.5,
       "position": [
-        1340,
+        1720,
         -120
       ],
       "parameters": {
         "method": "GET",
-        "url": "={{ 'https://graph.facebook.com/' + ($('Prepare Facebook Job').first().json.config.meta_graph_version || 'v22.0') + '/' + $('Prepare Facebook Job').first().json.config.facebook_page_id + '?fields=id,name,access_token' }}",
+        "url": "={{ 'https://graph.facebook.com/' + ($('Prepare Facebook Job').first().json.version || 'v22.0') + '/' + $('Prepare Facebook Job').first().json.page_id + '?fields=id,name,access_token' }}",
         "authentication": "predefinedCredentialType",
         "nodeCredentialType": "facebookGraphApi",
         "options": {
@@ -176,12 +229,12 @@
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.5,
       "position": [
-        1520,
+        1900,
         -120
       ],
       "parameters": {
         "method": "GET",
-        "url": "={{ 'https://graph.facebook.com/' + ($('Prepare Facebook Job').first().json.config.meta_graph_version || 'v22.0') + '/me?fields=id,name' }}",
+        "url": "={{ 'https://graph.facebook.com/' + ($('Prepare Facebook Job').first().json.version || 'v22.0') + '/me?fields=id,name' }}",
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [
@@ -203,11 +256,11 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        1700,
+        2080,
         -120
       ],
       "parameters": {
-        "jsCode": "const expected = String($('Prepare Facebook Job').first().json.config.facebook_page_id || '');\nconst page = $('Get Page Token').first().json;\nconst me = $json;\nconst errText = (r) => r && r.error ? String(r.error.description || r.error.message || JSON.stringify(r.error)).slice(0, 300) : null;\nlet error = null;\nif (!expected) error = 'FACEBOOK_PAGE_ID is not configured';\nelse if (errText(page)) error = 'Cannot read Page ' + expected + ': ' + errText(page);\nelse if (String(page.id) !== expected) error = 'Page lookup returned ' + page.id + ', expected ' + expected;\nelse if (!page.access_token) error = 'No Page access token for ' + expected + ' (grant pages_show_list / pages_manage_posts for this Page)';\nelse if (errText(me)) error = 'Page token check failed: ' + errText(me);\nelse if (String(me.id) !== expected) error = 'Token acts as ' + me.name + ' (' + me.id + '), not Page ' + expected;\nreturn [{ json: { guard_ok: !error, error, page_id: expected, page_name: page.name || null } }];\n"
+        "jsCode": "const expected = String($('Prepare Facebook Job').first().json.page_id || '');\nconst page = $('Get Page Token').first().json;\nconst me = $json;\nconst errText = (r) => r && r.error ? String(r.error.description || r.error.message || JSON.stringify(r.error)).slice(0, 300) : null;\nlet error = null;\nif (!expected) error = 'FACEBOOK_PAGE_ID is not configured';\nelse if (errText(page)) error = 'Cannot read Page ' + expected + ': ' + errText(page);\nelse if (String(page.id) !== expected) error = 'Page lookup returned ' + page.id + ', expected ' + expected;\nelse if (!page.access_token) error = 'No Page access token for ' + expected + ' (grant pages_show_list / pages_manage_posts for this Page)';\nelse if (errText(me)) error = 'Page token check failed: ' + errText(me);\nelse if (String(me.id) !== expected) error = 'Token acts as ' + me.name + ' (' + me.id + '), not Page ' + expected;\nreturn [{ json: { guard_ok: !error, error, page_id: expected, page_name: page.name || null } }];\n"
       }
     },
     {
@@ -216,7 +269,7 @@
       "type": "n8n-nodes-base.if",
       "typeVersion": 2.3,
       "position": [
-        1900,
+        2280,
         -120
       ],
       "parameters": {
@@ -245,17 +298,122 @@
       }
     },
     {
-      "id": "f9a51183-45ea-5d3f-9d4a-17e7d14b2c93",
-      "name": "Publish Official API",
+      "id": "ea7e8c34-3f6a-5444-8d67-8f19783e8afd",
+      "name": "Is Video?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        2480,
+        -120
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "736b22c0-4993-5dd1-a7fc-dd93bcbb13da",
+              "leftValue": "={{ $('Prepare Facebook Job').first().json.is_video }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "f2174e40-daf2-5c12-9cd8-c41f12571020",
+      "name": "Finish Allowed?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        3180,
+        -400
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "db5aee92-e4ff-5f87-bb9a-1e7b1a7ddcd9",
+              "leftValue": "={{ !($('When Called by Another Workflow').first().json.validate_only === true) }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "05ecfbbe-e49f-5c31-ab38-2a7f61913ce6",
+      "name": "Photo Allowed?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        2580,
+        100
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "79975f24-5ba6-5541-ba64-b86564c68802",
+              "leftValue": "={{ !($('When Called by Another Workflow').first().json.validate_only === true) }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "d1e78ec3-6295-5443-8b9e-d9229453c2a3",
+      "name": "FB Reel Start",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.5,
       "position": [
-        2120,
-        -200
+        2680,
+        -240
       ],
       "parameters": {
         "method": "POST",
-        "url": "={{ $('Prepare Facebook Job').first().json.publish_url }}",
+        "url": "={{ 'https://graph.facebook.com/' + $('Prepare Facebook Job').first().json.version + '/' + $('Prepare Facebook Job').first().json.page_id + '/video_reels' }}",
+        "options": {
+          "timeout": 180000
+        },
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [
@@ -268,25 +426,81 @@
         "sendBody": true,
         "contentType": "raw",
         "rawContentType": "application/json",
-        "body": "={{ JSON.stringify($('Prepare Facebook Job').first().json.publish_body) }}",
+        "body": "={{ JSON.stringify({ upload_phase: 'start' }) }}"
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "6dbadf89-ba8e-5299-84fc-77046fe70971",
+      "name": "Read Video",
+      "type": "n8n-nodes-base.readWriteFile",
+      "typeVersion": 1,
+      "position": [
+        2880,
+        -240
+      ],
+      "parameters": {
+        "operation": "read",
+        "fileSelector": "={{ $('Prepare Facebook Job').first().json.local_path }}",
         "options": {
-          "timeout": 180000
+          "dataPropertyName": "data"
         }
       },
       "onError": "continueRegularOutput"
     },
     {
-      "id": "c6c7d1a0-5958-5b11-9072-ab9fa03f91ee",
-      "name": "Verify Post Owner",
+      "id": "997cb5f6-5de1-5661-8d7b-485e2dfd4735",
+      "name": "FB Reel Upload",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.5,
       "position": [
-        2340,
-        -200
+        3080,
+        -240
       ],
       "parameters": {
-        "method": "GET",
-        "url": "={{ 'https://graph.facebook.com/' + $('Prepare Facebook Job').first().json.config.meta_graph_version + '/' + ($json.post_id || $json.id || 'missing') + '?fields=id,from{id,name},permalink_url' }}",
+        "method": "POST",
+        "url": "={{ $('FB Reel Start').first().json.upload_url || ('https://rupload.facebook.com/video-upload/' + $('Prepare Facebook Job').first().json.version + '/' + $('FB Reel Start').first().json.video_id) }}",
+        "options": {
+          "timeout": 300000
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "={{ 'OAuth ' + ($('Get Page Token').first().json.access_token || 'missing') }}"
+            },
+            {
+              "name": "offset",
+              "value": "0"
+            },
+            {
+              "name": "file_size",
+              "value": "={{ String($('Prepare Facebook Job').first().json.file_size) }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "binaryData",
+        "inputDataFieldName": "data"
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "7494274a-c29e-56a3-a228-f1a7bbcca60d",
+      "name": "FB Reel Finish",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        3280,
+        -240
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ 'https://graph.facebook.com/' + $('Prepare Facebook Job').first().json.version + '/' + $('Prepare Facebook Job').first().json.page_id + '/video_reels' }}",
+        "options": {
+          "timeout": 180000
+        },
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [
@@ -296,8 +510,84 @@
             }
           ]
         },
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "upload_phase",
+              "value": "finish"
+            },
+            {
+              "name": "video_id",
+              "value": "={{ $('FB Reel Start').first().json.video_id }}"
+            },
+            {
+              "name": "video_state",
+              "value": "PUBLISHED"
+            },
+            {
+              "name": "description",
+              "value": "={{ $('Prepare Facebook Job').first().json.message }}"
+            }
+          ]
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "23b03b9b-7816-5954-bf78-10a86b824f00",
+      "name": "FB Publish Photo",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        2680,
+        0
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ 'https://graph.facebook.com/' + $('Prepare Facebook Job').first().json.version + '/' + $('Prepare Facebook Job').first().json.page_id + '/photos' }}",
+        "options": {
+          "timeout": 180000
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "={{ 'OAuth ' + ($('Get Page Token').first().json.access_token || 'missing') }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ JSON.stringify({ url: $('Prepare Facebook Job').first().json.image_url, caption: $('Prepare Facebook Job').first().json.message }) }}"
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "c6c7d1a0-5958-5b11-9072-ab9fa03f91ee",
+      "name": "Verify Post Owner",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        3480,
+        -120
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "={{ 'https://graph.facebook.com/' + $('Prepare Facebook Job').first().json.version + '/' + ($('Prepare Facebook Job').first().json.is_video ? ($('FB Reel Start').first().json.video_id || 'missing') : ($json.post_id || $json.id || 'missing')) + '?fields=id,from{id,name},permalink_url' }}",
         "options": {
           "timeout": 60000
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "={{ 'OAuth ' + ($('Get Page Token').first().json.access_token || 'missing') }}"
+            }
+          ]
         }
       },
       "onError": "continueRegularOutput"
@@ -308,12 +598,57 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        2560,
+        3680,
         -120
       ],
       "parameters": {
-        "jsCode": "const prepared = $('Prepare Facebook Job').first().json;\nconst guard = $('Page Guard').first().json;\nconst pageId = String(prepared.config.facebook_page_id);\nconst base = { product_id: prepared.product_id, platform: 'facebook' };\nconst errText = (r) => r && r.error ? String(r.error.description || r.error.message || JSON.stringify(r.error)).slice(0, 400) : null;\nif (!guard.guard_ok) return [{ json: { ...base, status: 'failed', error_message: 'Not posted: ' + guard.error } }];\nlet response = {};\nlet owner = {};\ntry { response = $('Publish Official API').first().json; } catch (e) {}\ntry { owner = $('Verify Post Owner').first().json; } catch (e) {}\nconst postId = response.post_id || response.id || null;\nif (errText(response) || !postId) {\n  return [{ json: { ...base, status: 'failed', error_message: errText(response) || ('No Facebook post id in response: ' + JSON.stringify(response).slice(0, 400)) } }];\n}\nconst ownerId = owner.from ? String(owner.from.id) : null;\nif (ownerId && ownerId !== pageId) {\n  return [{ json: { ...base, status: 'failed', post_id: String(postId), error_message: 'Posted as ' + owner.from.name + ' (' + ownerId + '), not Page ' + pageId + '. Delete it manually.' } }];\n}\nreturn [{ json: { ...base, status: 'published', post_id: String(postId), owner_verified: ownerId === pageId, permalink_url: owner.permalink_url || null } }];\n"
+        "jsCode": "const errText = (r) => r && r.error ? String(r.error.description || r.error.message || JSON.stringify(r.error)).slice(0, 400) : null;\nconst get = (n) => { try { return $(n).last().json; } catch (e) { return null; } };\nconst validateOnly = $('When Called by Another Workflow').first().json.validate_only === true;\n\nconst prep = get('Prepare Facebook Job');\nconst base = { product_id: prep.product_id, platform: 'facebook' };\nconst fail = (msg, extra) => [{ json: { ...base, ...(extra || {}), status: 'failed', error_message: String(msg || 'unknown error').slice(0, 500) } }];\nif (prep.error) return fail(prep.error);\nconst guard = get('Page Guard');\nif (!guard || !guard.guard_ok) return fail('Not posted: ' + ((guard && guard.error) || 'Page check failed'));\nconst pageId = String(prep.page_id);\nlet postId = null;\nif (validateOnly) {\n  if (!prep.is_video) return [{ json: { ...base, status: 'validated', validate_only: true, page_id: pageId, page_name: guard.page_name, note: 'photo products: Page guard only (a photo upload would publish)' } }];\n  const start = get('FB Reel Start') || {};\n  const upload = get('FB Reel Upload') || {};\n  const err = errText(start) || (start.video_id ? null : 'video_reels start returned no video_id') || errText(upload) || (upload.success === true ? null : 'upload response: ' + JSON.stringify(upload).slice(0, 200));\n  if (err) return fail(err);\n  return [{ json: { ...base, status: 'validated', validate_only: true, page_id: pageId, page_name: guard.page_name, upload_session: String(start.video_id), note: 'uploaded, never finished \u2014 nothing published' } }];\n}\nif (prep.is_video) {\n  const start = get('FB Reel Start') || {};\n  const upload = get('FB Reel Upload');\n  const finish = get('FB Reel Finish') || {};\n  const err = errText(start) || (start.video_id ? null : 'video_reels start returned no video_id') || errText(upload) || errText(finish);\n  if (err || finish.success !== true) return fail(err || ('finish response: ' + JSON.stringify(finish).slice(0, 300)));\n  postId = String(start.video_id);\n} else {\n  const photo = get('FB Publish Photo') || {};\n  postId = photo.post_id || photo.id || null;\n  if (errText(photo) || !postId) return fail(errText(photo) || ('No Facebook post id in response: ' + JSON.stringify(photo).slice(0, 300)));\n  postId = String(postId);\n}\nconst owner = get('Verify Post Owner') || {};\nconst ownerId = owner.from ? String(owner.from.id) : null;\nif (ownerId && ownerId !== pageId) {\n  return fail('Posted as ' + owner.from.name + ' (' + ownerId + '), not Page ' + pageId + '. Delete it manually.', { post_id: postId });\n}\nconst url = owner.permalink_url || (prep.is_video ? 'https://www.facebook.com/reel/' + postId : null);\nreturn [{ json: { ...base, status: 'published', post_id: postId, owner_verified: ownerId === pageId, url } }];\n"
       }
+    },
+    {
+      "id": "abdd2e22-ab96-5f5e-8d01-4ac463fd28b1",
+      "name": "Record Result?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        3780,
+        -120
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "764833cd-32db-55b8-96a7-d3041ae5e1d0",
+              "leftValue": "={{ !($('When Called by Another Workflow').first().json.validate_only === true) }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "96e020d6-c619-536e-a27d-7ca66dc1efe7",
+      "name": "Validation Result",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        3980,
+        -260
+      ],
+      "parameters": {}
     },
     {
       "id": "0c022beb-1004-5cb3-a843-b2c54b75c5a6",
@@ -321,7 +656,7 @@
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.5,
       "position": [
-        1960,
+        3880,
         40
       ],
       "parameters": {
@@ -392,6 +727,17 @@
       "main": [
         [
           {
+            "node": "Media Size",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Media Size": {
+      "main": [
+        [
+          {
             "node": "Prepare Facebook Job",
             "type": "main",
             "index": 0
@@ -403,7 +749,25 @@
       "main": [
         [
           {
+            "node": "Job Ready?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Job Ready?": {
+      "main": [
+        [
+          {
             "node": "Get Page Token",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Interpret Result",
             "type": "main",
             "index": 0
           }
@@ -447,7 +811,7 @@
       "main": [
         [
           {
-            "node": "Publish Official API",
+            "node": "Is Video?",
             "type": "main",
             "index": 0
           }
@@ -461,7 +825,105 @@
         ]
       ]
     },
-    "Publish Official API": {
+    "Is Video?": {
+      "main": [
+        [
+          {
+            "node": "FB Reel Start",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Photo Allowed?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Photo Allowed?": {
+      "main": [
+        [
+          {
+            "node": "FB Publish Photo",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Interpret Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "FB Reel Start": {
+      "main": [
+        [
+          {
+            "node": "Read Video",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Video": {
+      "main": [
+        [
+          {
+            "node": "FB Reel Upload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "FB Reel Upload": {
+      "main": [
+        [
+          {
+            "node": "Finish Allowed?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Finish Allowed?": {
+      "main": [
+        [
+          {
+            "node": "FB Reel Finish",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Interpret Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "FB Reel Finish": {
+      "main": [
+        [
+          {
+            "node": "Verify Post Owner",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "FB Publish Photo": {
       "main": [
         [
           {
@@ -487,7 +949,25 @@
       "main": [
         [
           {
+            "node": "Record Result?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Record Result?": {
+      "main": [
+        [
+          {
             "node": "Store Platform Result",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Validation Result",
             "type": "main",
             "index": 0
           }

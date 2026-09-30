@@ -10,9 +10,9 @@ This project does **not** use Zapier, Make, Buffer, upload-post.com, or a custom
 | --- | --- |
 | n8n at http://localhost:5678 | Schedule, Google Drive, AI calls, official social APIs |
 | Tracking API at http://localhost:8081 | SQLite product tracker, duplicate protection, logs, previews |
-| Dashboard at http://localhost:8081/dashboard | System status, DRY_RUN indicator, schedule time picker, 3-product queue, per-platform results, runs and activity ([docs/DASHBOARD.md](docs/DASHBOARD.md)) |
+| Dashboard (GitHub Pages for production, http://localhost:8081/dashboard locally) | LIVE/DRY_RUN status, editable daily times, today's posts, next 6 posts, queue, per-platform results and post IDs ([docs/DASHBOARD.md](docs/DASHBOARD.md)) |
 
-Default safety: **`DRY_RUN=true`**. Nothing is published to Instagram, Facebook, Pinterest, or YouTube until you explicitly set `DRY_RUN=false`.
+Local default: **`DRY_RUN=true`**. Live publishing runs only in GitHub Actions when the `PRODUCTION_LIVE` repository variable is `true` ([docs/PRODUCTION.md](docs/PRODUCTION.md)).
 
 ## Integration priority
 
@@ -28,15 +28,15 @@ Exact order: [docs/INTEGRATION_PRIORITY.md](docs/INTEGRATION_PRIORITY.md)
 8. Final full-system DRY_RUN  
 9. Real publishing — only after your explicit approval  
 
-## Free daily runs (GitHub Actions)
+## Production (GitHub Actions)
 
-See [docs/GITHUB_ACTIONS_DEPLOY.md](docs/GITHUB_ACTIONS_DEPLOY.md). The repo runs once per day on free GitHub-hosted runners at the time chosen in the dashboard (boot stack → dry-run verify → shut down). Social publishing stays blocked there.
+See [docs/PRODUCTION.md](docs/PRODUCTION.md). Production publishes on free GitHub-hosted runners at the dashboard times (default 6:00 PM and 10:00 PM IST) — no PC or local n8n required. Every push is also verified end-to-end in DRY_RUN ([docs/GITHUB_ACTIONS_DEPLOY.md](docs/GITHUB_ACTIONS_DEPLOY.md)).
 
 ## Daily behaviour
 
-The publishing time is chosen on the dashboard (**Schedule settings**) and stored in `config/schedule.json`, the single source of truth (timezone **Asia/Kolkata**). There is no hard-coded time.
+The publishing times are chosen on the dashboard (**Schedule settings**) and stored in `config/schedule.json`, the single source of truth (timezone **Asia/Kolkata**). There is no hard-coded time.
 
-Continuously, **16 Content Queue Preparer** keeps the next **3** products ready in advance:
+Continuously, **16 Content Queue Preparer** keeps the next **8** products ready in advance (at least 3 days of posts):
 
 1. List files in the configured Google Drive folder.
 2. Parse numeric Product IDs (`1.jpg`, `4.mp4`, …). `4.jpg` and `4.mp4` are the same product.
@@ -44,9 +44,9 @@ Continuously, **16 Content Queue Preparer** keeps the next **3** products ready 
 4. Download the actual media and run **real vision AI**. No invented specs. No website URL.
 5. Save the preview and add the product to the rolling queue.
 
-Once per day at the selected time, **01 Daily Publisher**:
+At each selected time, **01 Daily Publisher**:
 
-1. Takes the **queue head** (one product per day).
+1. Takes the **queue head** (one product per time slot).
 2. If `DRY_RUN=true`, logs the preview and stops. If `DRY_RUN=false`, publishes only platforms that have not already succeeded.
 3. Marks the Product ID completed only when every **required** platform succeeded, then the queue advances and the preparer refills it.
 

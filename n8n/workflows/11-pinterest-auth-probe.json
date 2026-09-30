@@ -75,7 +75,7 @@
         0
       ],
       "parameters": {
-        "jsCode": "const config = $('Load Config').first().json;\nconst readiness = $json;\nif (config.dry_run !== true) {\n  throw new Error('Refusing Pinterest probe while DRY_RUN is not true.');\n}\nreturn [{ json: {\n  dry_run: true,\n  readiness,\n  board_id_configured: Boolean(String(config.pinterest_board_id || '').trim()),\n  note: 'About to call user_account + boards \u2014 read only, no Pin create.'\n} }];\n"
+        "jsCode": "const config = $('Load Config').first().json;\nconst readiness = $json;\nreturn [{ json: {\n  dry_run: config.dry_run,\n  readiness,\n  board_id_configured: Boolean(String(config.pinterest_board_id || '').trim()),\n  note: 'About to call user_account + boards \u2014 read only, no Pin create.'\n} }];\n"
       }
     },
     {

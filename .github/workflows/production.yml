@@ -1,0 +1,238 @@
+name: Production publisher
+
+# Live publishing for Zyra Studio — runs entirely on GitHub-hosted runners (no PC or local n8n needed).
+#
+# - Times come from config/schedule.json (dashboard-editable; default 18:00 + 22:00 Asia/Kolkata).
+#   GitHub cron cannot be rewritten by a workflow token, so this ticks every 10 minutes and
+#   scripts/schedule_gate.py decides whether a slot is due (publish) or the buffer needs a refill.
+# - State (tracking DB, generated content, n8n credentials incl. refreshed OAuth tokens) persists on
+#   the production-state branch, AES-256 encrypted with the STATE_KEY secret.
+# - LIVE only when repository variable PRODUCTION_LIVE is 'true'. Otherwise nothing is published.
+
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "auto = publish a due slot, else refill the buffer"
+        type: choice
+        options: [auto, prepare-only, validate-only]
+        default: auto
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      run: ${{ steps.gate.outputs.run }}
+      mode: ${{ steps.gate.outputs.mode }}
+      slot: ${{ steps.gate.outputs.slot }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            config/schedule.json
+            scripts/schedule_gate.py
+          sparse-checkout-cone-mode: false
+
+      - name: Read schedule bookkeeping from production-state
+        run: |
+          mkdir -p state
+          if git fetch --depth=1 origin production-state 2>/dev/null; then
+            for f in slots queue; do git show "FETCH_HEAD:state/$f.json" > "state/$f.json" 2>/dev/null || rm -f "state/$f.json"; done
+          fi
+
+      - name: Decide
+        id: gate
+        env:
+          GATE_MODE: ${{ inputs.mode || 'auto' }}
+        run: python3 scripts/schedule_gate.py
+
+  run:
+    needs: gate
+    if: needs.gate.outputs.run == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    concurrency:
+      group: production
+      cancel-in-progress: false
+    outputs:
+      site: ${{ steps.export.outcome }}
+    env:
+      MODE: ${{ needs.gate.outputs.mode }}
+      SLOT: ${{ needs.gate.outputs.slot }}
+      LIVE: ${{ vars.PRODUCTION_LIVE == 'true' && 'true' || 'false' }}
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      STATE_KEY: ${{ secrets.STATE_KEY }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Unit tests
+        run: |
+          python3 scripts/test_schedule_queue.py
+          python3 scripts/validate_workflows.py
+
+      - name: Restore production state
+        run: bash scripts/production_state.sh restore
+
+      - name: Create runtime .env
+        env:
+          N8N_ENCRYPTION_KEY: ${{ secrets.N8N_ENCRYPTION_KEY }}
+          N8N_OWNER_PASSWORD: ${{ secrets.N8N_OWNER_PASSWORD }}
+          N8N_OWNER_EMAIL: ${{ secrets.N8N_OWNER_EMAIL }}
+          FACEBOOK_PAGE_ID: ${{ vars.FACEBOOK_PAGE_ID }}
+          INSTAGRAM_BUSINESS_ACCOUNT_ID: ${{ vars.INSTAGRAM_BUSINESS_ACCOUNT_ID }}
+          PINTEREST_BOARD_ID: ${{ vars.PINTEREST_BOARD_ID }}
+          YOUTUBE_PRIVACY_STATUS: ${{ vars.YOUTUBE_PRIVACY_STATUS }}
+          GOOGLE_DRIVE_FOLDER_ID: ${{ vars.GOOGLE_DRIVE_FOLDER_ID }}
+        run: |
+          set -euo pipefail
+          for v in N8N_ENCRYPTION_KEY N8N_OWNER_PASSWORD FACEBOOK_PAGE_ID INSTAGRAM_BUSINESS_ACCOUNT_ID; do
+            [ -n "${!v}" ] || { echo "::error::missing $v"; exit 1; }
+          done
+          DRY_RUN=true
+          [ "$LIVE" = "true" ] && DRY_RUN=false
+          cat > .env <<EOF
+          N8N_HOST=localhost
+          N8N_PORT=5678
+          N8N_PROTOCOL=http
+          WEBHOOK_URL=http://localhost:5678/
+          GENERIC_TIMEZONE=Asia/Kolkata
+          TZ=Asia/Kolkata
+          N8N_ENCRYPTION_KEY=${N8N_ENCRYPTION_KEY}
+          N8N_SECURE_COOKIE=false
+          N8N_BLOCK_ENV_ACCESS_IN_NODE=false
+          N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS=true
+          N8N_RESTRICT_FILE_ACCESS_TO=/data
+          N8N_OWNER_EMAIL=${N8N_OWNER_EMAIL:-admin@localhost.local}
+          N8N_OWNER_FIRST_NAME=Store
+          N8N_OWNER_LAST_NAME=Admin
+          N8N_OWNER_PASSWORD=${N8N_OWNER_PASSWORD}
+          DRY_RUN=${DRY_RUN}
+          USE_SAMPLE_MEDIA=false
+          SCHEDULER_ENABLED=false
+          GOOGLE_DRIVE_FOLDER_ID=${GOOGLE_DRIVE_FOLDER_ID:-1MU6xHdcI18mCbDsp1IxAyA9YoDfeRQKD}
+          DRIVE_ACCESS_MODE=public
+          FACEBOOK_PAGE_ID=${FACEBOOK_PAGE_ID}
+          INSTAGRAM_BUSINESS_ACCOUNT_ID=${INSTAGRAM_BUSINESS_ACCOUNT_ID}
+          META_GRAPH_VERSION=v22.0
+          PINTEREST_BOARD_ID=${PINTEREST_BOARD_ID}
+          YOUTUBE_PRIVACY_STATUS=${YOUTUBE_PRIVACY_STATUS:-private}
+          INCLUDE_WEBSITE_URL=false
+          AI_PROVIDER=gemini
+          GEMINI_MODEL=gemini-3.6-flash
+          GEMINI_HOST=https://generativelanguage.googleapis.com
+          AI_FALLBACK_PROVIDER=groq
+          GROQ_MODEL=qwen/qwen3.8-27b
+          TRACKING_API_PORT=8081
+          EOF
+          sed -i 's/^[[:space:]]*//' .env
+          sudo chmod -R a+rwX data
+          echo "Mode: $MODE  slot: ${SLOT:-none}  live: $LIVE" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Start stack
+        run: |
+          docker compose up -d --build tracking-api n8n
+          for i in $(seq 1 90); do
+            if curl -fsS http://127.0.0.1:8081/health >/dev/null && curl -fsS http://127.0.0.1:5678/healthz >/dev/null; then
+              sleep 20; exit 0
+            fi
+            sleep 5
+          done
+          docker compose logs --no-color --tail=80
+          exit 1
+
+      - name: Import credentials + workflows
+        id: stack
+        run: |
+          set -euo pipefail
+          chmod 644 .secrets/n8n-credentials.json
+          docker cp .secrets/n8n-credentials.json n8n:/tmp/creds.json
+          docker exec -u node n8n n8n import:credentials --input=/tmp/creds.json >/dev/null
+          docker exec -u root n8n rm -f /tmp/creds.json
+          python3 scripts/import_workflows.py
+
+      - name: Validate credentials, Page targeting, queue and schedule
+        id: validate
+        continue-on-error: true
+        run: |
+          FLAGS="--preflight"
+          [ "$MODE" = "validate" ] && FLAGS="--deep"
+          python3 scripts/production_ops.py validate $FLAGS --expect-live "$LIVE" --report reports/validate.json
+
+      - name: Publish the due slot
+        id: publish
+        if: env.MODE == 'publish' && env.LIVE == 'true' && steps.validate.outcome == 'success'
+        run: python3 scripts/production_ops.py publish --report reports/publish.json
+
+      - name: Checkpoint state right after publishing
+        if: ${{ !cancelled() && steps.publish.outcome != 'skipped' }}
+        run: |
+          python3 scripts/production_ops.py export --out . --reports reports/validate.json reports/publish.json
+          bash scripts/production_state.sh save "published $SLOT"
+
+      # Live mode only: DRY_RUN product selection skips previewed products, which would queue
+      # products out of Product ID order for production.
+      - name: Refill the content buffer
+        if: ${{ !cancelled() && env.MODE != 'validate' && env.LIVE == 'true' && steps.stack.outcome == 'success' }}
+        run: python3 scripts/production_ops.py refill --report reports/refill.json
+
+      - name: Export dashboard data + schedule bookkeeping
+        id: export
+        if: ${{ !cancelled() && steps.stack.outcome == 'success' }}
+        run: |
+          python3 scripts/production_ops.py export --out . --reports reports/validate.json reports/publish.json reports/refill.json
+          cp services/tracking-api/dashboard.html site/index.html
+          touch site/.nojekyll
+          python3 - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import json, pathlib
+          for name in ("publish", "refill"):
+              p = pathlib.Path(f"reports/{name}.json")
+              if p.exists():
+                  print(f"\n**{name}**\n```json\n{p.read_text()[:3000]}\n```")
+          PY
+
+      - name: Save production state
+        if: ${{ !cancelled() && steps.export.outcome == 'success' }}
+        run: bash scripts/production_state.sh save "$MODE"
+
+      - name: Upload dashboard
+        if: ${{ !cancelled() && steps.export.outcome == 'success' }}
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+      - name: Dump logs on failure
+        if: failure()
+        run: docker compose logs --no-color --tail=200 tracking-api
+
+      - name: Stop stack
+        if: always()
+        run: |
+          docker compose down
+          rm -rf .secrets
+
+      - name: Fail if validation failed
+        if: steps.validate.outcome == 'failure'
+        run: |
+          echo "::error::Validation failed — publishing was blocked. See the validate step and reports/validate.json."
+          exit 1
+
+  dashboard:
+    needs: run
+    if: ${{ !cancelled() && needs.run.outputs.site == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - id: deploy
+        uses: actions/deploy-pages@v4

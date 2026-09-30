@@ -51,6 +51,7 @@ CREATE TABLE IF NOT EXISTS content_queue (
   claimed_at TEXT,
   completed_at TEXT,
   run_date TEXT,
+  run_slot TEXT,
   claim_count INTEGER NOT NULL DEFAULT 0,
   last_error TEXT,
   reused_preview INTEGER NOT NULL DEFAULT 0

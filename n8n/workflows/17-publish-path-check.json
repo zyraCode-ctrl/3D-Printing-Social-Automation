@@ -1,0 +1,273 @@
+{
+  "id": "3dprPathCheck017",
+  "name": "17 Publish Path Check",
+  "active": false,
+  "isArchived": false,
+  "nodes": [
+    {
+      "id": "309de475-155f-51c1-9e0c-675d689bc447",
+      "name": "Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -380,
+        -300
+      ],
+      "parameters": {
+        "content": "## Publish Path Check (no posting)\n\nCalls **04 Instagram Publisher** and **05 Facebook Publisher** for the queue head with `validate_only: true`.\nInstagram: container + resumable upload + wait for FINISHED, **no media_publish** (the container expires unused).\nFacebook: Page token guard + Reel upload session, **never finished** (nothing is published).\nNo platform results are recorded.\n",
+        "width": 360,
+        "height": 280,
+        "color": 4
+      }
+    },
+    {
+      "id": "0f434fc1-b5cb-5457-b42a-ebc5a3944248",
+      "name": "Run Manually",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {}
+    },
+    {
+      "id": "1123a1ff-215c-539c-ba8f-a0211df2fe92",
+      "name": "Load Queue",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        220,
+        0
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "http://tracking-api:8081/queue",
+        "options": {
+          "timeout": 60000
+        }
+      }
+    },
+    {
+      "id": "66514d9a-12a3-5340-8287-21748c81c3ac",
+      "name": "Pick Queue Head",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        440,
+        0
+      ],
+      "parameters": {
+        "jsCode": "const q = $json;\nconst head = q.head || (q.active || []).find((r) => r.status === 'prepared');\nif (!head) throw new Error('No prepared product in the queue to validate');\nreturn [{ json: { product_id: head.product_id, filename: head.filename, validate_only: true } }];\n"
+      }
+    },
+    {
+      "id": "85bca3e9-5738-5df2-85de-2edadbbf4384",
+      "name": "Ensure Media",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        550,
+        160
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ 'http://tracking-api:8081/products/' + $json.product_id + '/ensure-media' }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({}) }}",
+        "options": {
+          "timeout": 120000
+        }
+      }
+    },
+    {
+      "id": "4a25206c-d7d6-5e9c-bf34-4769090987f3",
+      "name": "Head Job",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        600,
+        0
+      ],
+      "parameters": {
+        "jsCode": "return [{ json: $('Pick Queue Head').first().json }];\n"
+      }
+    },
+    {
+      "id": "1dcb0ac7-471b-5159-912d-ffeaf06fd641",
+      "name": "Check Instagram Path",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.3,
+      "position": [
+        760,
+        0
+      ],
+      "parameters": {
+        "source": "database",
+        "workflowId": {
+          "__rl": true,
+          "value": "3dprInstagram004",
+          "mode": "id",
+          "cachedResultName": "04 Instagram Publisher"
+        },
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "992c98e3-3a50-599b-b14a-e9d5d74c77c6",
+      "name": "Keep Job",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        880,
+        0
+      ],
+      "parameters": {
+        "jsCode": "return [{ json: { ...$('Pick Queue Head').first().json, media: $('Ensure Media').first().json, instagram: $json } }];\n"
+      }
+    },
+    {
+      "id": "73742105-63e4-5785-a450-52fd85d1b170",
+      "name": "Check Facebook Path",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.3,
+      "position": [
+        1100,
+        0
+      ],
+      "parameters": {
+        "source": "database",
+        "workflowId": {
+          "__rl": true,
+          "value": "3dprFacebook005",
+          "mode": "id",
+          "cachedResultName": "05 Facebook Publisher"
+        },
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "1b173409-b2f2-5411-bd40-3a42865b052f",
+      "name": "Summarize Check",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1320,
+        0
+      ],
+      "parameters": {
+        "jsCode": "const job = $('Keep Job').first().json;\nconst ig = job.instagram || {};\nconst fb = $json || {};\nconst ok = (r) => r.status === 'validated' && r.validate_only === true;\nreturn [{ json: {\n  product_id: job.product_id,\n  filename: job.filename,\n  media_ok: !!(job.media && job.media.ok),\n  media_error: (job.media && job.media.error) || null,\n  instagram_ok: ok(ig),\n  facebook_ok: ok(fb),\n  instagram: { status: ig.status, container_id: ig.container_id || null, status_code: ig.status_code || null, error: ig.error_message || ig.error || null },\n  facebook: { status: fb.status, page_id: fb.page_id || null, page_name: fb.page_name || null, upload_session: fb.upload_session || null, error: fb.error_message || fb.error || null },\n  published_anything: false\n} }];\n"
+      }
+    }
+  ],
+  "connections": {
+    "Run Manually": {
+      "main": [
+        [
+          {
+            "node": "Load Queue",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Queue": {
+      "main": [
+        [
+          {
+            "node": "Pick Queue Head",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Pick Queue Head": {
+      "main": [
+        [
+          {
+            "node": "Ensure Media",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ensure Media": {
+      "main": [
+        [
+          {
+            "node": "Head Job",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Head Job": {
+      "main": [
+        [
+          {
+            "node": "Check Instagram Path",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Instagram Path": {
+      "main": [
+        [
+          {
+            "node": "Keep Job",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Keep Job": {
+      "main": [
+        [
+          {
+            "node": "Check Facebook Path",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Facebook Path": {
+      "main": [
+        [
+          {
+            "node": "Summarize Check",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Asia/Kolkata",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false,
+    "errorWorkflow": "3dprErrorLog008"
+  },
+  "pinData": {},
+  "versionId": "1ba4720e-df65-5265-aa86-d9d100053d42",
+  "meta": {
+    "templateCredsSetupCompleted": false
+  },
+  "tags": []
+}
