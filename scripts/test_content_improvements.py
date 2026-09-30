@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Full DRY_RUN: advance past previewed products, run Daily Publisher, verify preview quality."""
+"""Run 16 Content Queue Preparer once (Drive → AI → saved preview) and verify preview quality."""
 
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 from import_workflows import N8n, load_env  # noqa: E402
 
-DAILY_WF = "3dprDailyPub0001"
+PREP_WF = "3dprQueuePrep016"
 TRACKING = "http://127.0.0.1:8081"
 REQUIRED_NODES = [
     "List Google Drive Folder",
@@ -23,7 +23,7 @@ REQUIRED_NODES = [
     "Prepare Vision Still",
     "Generate AI Content",
     "Save Preview",
-    "Finalize Dry Run",
+    "Prepared Summary",
 ]
 
 
@@ -140,12 +140,10 @@ def main() -> None:
     if cfg.get("dry_run") is not True:
         raise SystemExit("DRY_RUN must stay true")
 
-    # Advance any stuck processing product into previewed so the next ID is selected.
-    status = http_json("GET", f"{TRACKING}/status")
-    for product in status.get("products") or []:
-        if product.get("overall_status") in {"processing", "pending"} and product.get("product_id") == 1:
-            fin = http_json("POST", f"{TRACKING}/products/1/finalize", {})
-            print("advance_product_1", fin.get("overall_status"), fin.get("product_id"))
+    queue = http_json("GET", f"{TRACKING}/queue")
+    if len(queue.get("active") or []) >= queue.get("queue_size", 3):
+        print("Queue already full; nothing for the preparer to generate:", [r["product_id"] for r in queue["active"]])
+        return
 
     client = N8n(f"http://127.0.0.1:{env.get('N8N_PORT', '5678')}")
     st, _ = client.json(
@@ -161,7 +159,7 @@ def main() -> None:
 
     st, run = client.json(
         "POST",
-        f"/rest/workflows/{DAILY_WF}/run",
+        f"/rest/workflows/{PREP_WF}/run",
         {"triggerToStartFrom": {"name": "Run Manually"}},
     )
     eid = (run.get("data") or {}).get("executionId")
@@ -181,10 +179,9 @@ def main() -> None:
         for name in REQUIRED_NODES:
             result["nodes"][name] = node_ok(run_data, name)
         selected = result["nodes"].get("Select Next Product") or {}
-        finalized = result["nodes"].get("Finalize Dry Run") or {}
         result["product_id"] = selected.get("product_id")
         result["filename"] = selected.get("filename")
-        result["finalize_status"] = finalized.get("overall_status")
+        result["finalize_status"] = "prepared" if (result["nodes"].get("Prepared Summary") or {}).get("ok") else None
         result["ok"] = status_name == "success" and all(
             (result["nodes"].get(n) or {}).get("ok") for n in REQUIRED_NODES
         )
@@ -224,7 +221,6 @@ def main() -> None:
         },
         "file_matches_api": preview.get("content") == file_preview.get("content"),
         "quality": report,
-        "advanced_past_product_1": pid not in (1, "1"),
     }
     print(json.dumps(out, indent=2))
     if not report["meta_ok"] or report["issues"]:
@@ -232,8 +228,6 @@ def main() -> None:
         if not report["meta_ok"]:
             raise SystemExit(2)
         print("QUALITY_WARNINGS", report["issues"])
-    if pid in (1, "1"):
-        print("NOTE: selected product_id is still 1; check whether later products exist in Drive")
 
 
 if __name__ == "__main__":

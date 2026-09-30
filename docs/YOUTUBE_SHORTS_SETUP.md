@@ -44,4 +44,4 @@ Do not create OAuth clients yet — wait for the next single instruction after y
 
 - No Shorts upload
 - No `DRY_RUN=false`
-- No Pinterest / Meta setup in this phase
+- Meta setup stays after Pinterest (see [INTEGRATION_PRIORITY.md](INTEGRATION_PRIORITY.md))

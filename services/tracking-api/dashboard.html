@@ -1,0 +1,713 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Zyra Studio · Social Automation</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #0d1117; --panel: #151b23; --panel2: #1b2330; --line: #283241; --text: #e6edf3; --muted: #8b98a8;
+      --green: #3fb950; --red: #f85149; --amber: #d29922; --blue: #58a6ff; --purple: #bc8cff; --orange: #f0883e; --gray: #6e7681;
+      --radius: 12px;
+      font-family: "Segoe UI", system-ui, -apple-system, Roboto, sans-serif;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: var(--bg); color: var(--text); font-size: 14px; line-height: 1.45; }
+    a { color: var(--blue); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    h2 { font-size: 14px; margin: 0; font-weight: 600; letter-spacing: .01em; }
+    .muted { color: var(--muted); }
+    .small { font-size: 12px; }
+    .mono { font-family: Consolas, "Cascadia Mono", ui-monospace, monospace; font-size: 12.5px; }
+
+    header { position: sticky; top: 0; z-index: 10; background: #0b0f14f2; backdrop-filter: blur(8px); border-bottom: 1px solid var(--line); }
+    .bar-top { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding: 12px 22px; }
+    .brand { display: flex; align-items: center; gap: 10px; font-weight: 650; font-size: 16px; }
+    .brand .logo { width: 28px; height: 28px; border-radius: 8px; background: linear-gradient(135deg, #58a6ff, #bc8cff); display: grid; place-items: center; font-weight: 800; color: #0d1117; }
+    .spacer { flex: 1; }
+    .mode { display: flex; align-items: center; gap: 10px; padding: 10px 22px; font-weight: 600; border-top: 1px solid var(--line); }
+    .mode.dry { background: #2a2210; color: #f2cc60; }
+    .mode.live { background: #3b1414; color: #ffb3ad; }
+    .mode .big { font-size: 15px; letter-spacing: .02em; }
+    .mode .sub { font-weight: 400; opacity: .85; }
+    .pills { display: flex; gap: 6px; flex-wrap: wrap; }
+    .pill { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; border-radius: 999px; font-size: 12px; font-weight: 600; border: 1px solid var(--line); background: var(--panel2); white-space: nowrap; }
+    .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--gray); display: inline-block; flex: none; }
+    .ok .dot { background: var(--green); } .bad .dot { background: var(--red); } .warn .dot { background: var(--amber); }
+    button, select, input[type=search], input[type=time] { background: var(--panel2); color: var(--text); border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; font: inherit; font-size: 13px; }
+    button { cursor: pointer; }
+    button:hover:not(:disabled) { border-color: var(--blue); }
+    button.primary { background: #1f6feb; border-color: #1f6feb; color: #fff; font-weight: 600; }
+    button.primary:hover:not(:disabled) { background: #388bfd; }
+    button:disabled { opacity: .55; cursor: default; }
+    label.toggle { display: inline-flex; gap: 6px; align-items: center; color: var(--muted); font-size: 13px; }
+
+    main { padding: 18px 22px 48px; display: grid; gap: 18px; max-width: 1600px; margin: 0 auto; }
+    .grid { display: grid; gap: 14px; }
+    .kpis { grid-template-columns: repeat(auto-fit, minmax(165px, 1fr)); }
+    .row3 { grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); }
+    .row2 { grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr); }
+    @media (max-width: 1100px) { .row2 { grid-template-columns: 1fr; } }
+    .card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px 16px; min-width: 0; }
+    .card .k { color: var(--muted); font-size: 11.5px; text-transform: uppercase; letter-spacing: .06em; font-weight: 600; }
+    .card .v { font-size: 28px; font-weight: 700; margin-top: 4px; }
+    .card .sub { color: var(--muted); font-size: 12px; margin-top: 2px; }
+    .card h3 { margin: 0 0 10px; font-size: 13px; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+    .hero { font-size: 20px; font-weight: 700; }
+    .kv-list { display: grid; grid-template-columns: max-content 1fr; gap: 5px 14px; margin-top: 8px; font-size: 13px; }
+    .kv-list > div:nth-child(odd) { color: var(--muted); }
+
+    .queue { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }
+    .slot { border: 1px solid var(--line); border-radius: 10px; padding: 12px; background: var(--panel2); position: relative; }
+    .slot.head { border-color: #1f6feb; box-shadow: 0 0 0 1px #1f6feb55 inset; }
+    .slot.empty { border-style: dashed; background: transparent; color: var(--muted); display: grid; place-items: center; min-height: 104px; text-align: center; }
+    .slot .pos { position: absolute; top: 10px; right: 12px; font-size: 11px; color: var(--muted); font-weight: 600; }
+    .slot .pid { font-size: 18px; font-weight: 700; }
+
+    .chip { display: inline-flex; align-items: center; gap: 5px; padding: 2px 8px; border-radius: 999px; font-size: 12px; font-weight: 600; background: var(--panel2); border: 1px solid var(--line); white-space: nowrap; }
+    .s-success, .s-published, .s-done { color: var(--green); } .s-success .dot, .s-published .dot, .s-done .dot { background: var(--green); }
+    .s-error, .s-failed, .s-crashed { color: var(--red); } .s-error .dot, .s-failed .dot, .s-crashed .dot { background: var(--red); }
+    .s-running, .s-processing, .s-waiting, .s-new, .s-publishing { color: var(--blue); } .s-running .dot, .s-processing .dot, .s-waiting .dot, .s-new .dot, .s-publishing .dot { background: var(--blue); animation: pulse 1.2s infinite; }
+    .s-previewed, .s-prepared { color: var(--purple); } .s-previewed .dot, .s-prepared .dot { background: var(--purple); }
+    .s-pending { color: var(--amber); } .s-pending .dot { background: var(--amber); }
+    .s-partial { color: var(--orange); } .s-partial .dot { background: var(--orange); }
+    .s-skipped, .s-canceled { color: var(--gray); } .s-skipped .dot, .s-canceled .dot { background: var(--gray); }
+    @keyframes pulse { 50% { opacity: .35; } }
+
+    .platforms { grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); }
+    .pbar { display: flex; height: 8px; border-radius: 4px; overflow: hidden; background: var(--panel2); margin: 8px 0; }
+    .pbar span { display: block; height: 100%; }
+    .legend { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 12px; color: var(--muted); }
+    .legend b { color: var(--text); }
+
+    section.panel { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; min-width: 0; }
+    section.panel > .head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 10px 14px; border-bottom: 1px solid var(--line); background: var(--panel2); }
+    .scroll { max-height: 520px; overflow: auto; }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { padding: 8px 12px; text-align: left; border-bottom: 1px solid var(--line); vertical-align: top; }
+    th { position: sticky; top: 0; background: var(--panel); color: var(--muted); font-weight: 600; font-size: 12px; z-index: 1; white-space: nowrap; }
+    tr.clickable { cursor: pointer; }
+    tr.clickable:hover td { background: #1c2430; }
+    tr.selected td { background: #182a40 !important; }
+    .postid { display: block; font-size: 11px; color: var(--muted); margin-top: 2px; max-width: 170px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+    .steps { padding: 6px 0; }
+    .step { display: grid; grid-template-columns: 16px 1fr auto; gap: 8px; padding: 7px 14px; border-bottom: 1px dashed var(--line); }
+    .step:last-child { border-bottom: 0; }
+    .step .name { font-weight: 600; }
+    .step .meta { color: var(--muted); font-size: 12px; text-align: right; white-space: nowrap; }
+    .err { color: var(--red); font-size: 12px; margin-top: 3px; white-space: pre-wrap; word-break: break-word; }
+    .kv { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
+    .kv span { font-size: 11.5px; background: var(--panel2); border: 1px solid var(--line); border-radius: 4px; padding: 1px 6px; color: var(--muted); max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .kv span b { color: var(--text); font-weight: 500; }
+    .empty { padding: 24px; text-align: center; color: var(--muted); }
+    .banner { padding: 10px 14px; border-radius: 10px; border: 1px solid var(--line); }
+    .banner.warn { border-color: #6b4f16; background: #2a2210; color: #f2cc60; }
+    .banner.err { border-color: #6e2a28; background: #2a1414; color: #ffa198; }
+    .banner.info { border-color: #1f3f66; background: #0f1d2e; color: #9ecbff; }
+    .log-lvl-error { color: var(--red); } .log-lvl-warn, .log-lvl-warning { color: var(--amber); } .log-lvl-info { color: var(--blue); }
+    details summary { cursor: pointer; color: var(--muted); font-size: 12px; }
+    details pre { white-space: pre-wrap; word-break: break-word; margin: 4px 0 0; color: var(--muted); font-size: 11.5px; max-height: 220px; overflow: auto; }
+
+    .sched { display: grid; gap: 10px; }
+    .sched .picker { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+    .sched input[type=time] { font-size: 20px; padding: 6px 10px; color-scheme: dark; }
+    .note { font-size: 12px; color: var(--muted); }
+    .note.warn { color: var(--amber); }
+    .note.ok { color: var(--green); }
+    .note.err { color: var(--red); }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="bar-top">
+      <div class="brand"><div class="logo">Z</div>Zyra Studio · Social Automation</div>
+      <div class="pills" id="systemPills"></div>
+      <span class="spacer"></span>
+      <span id="updated" class="muted small">loading…</span>
+      <label class="toggle"><input type="checkbox" id="auto" checked /> auto-refresh</label>
+      <button id="refresh">Refresh</button>
+      <a class="pill" href="http://localhost:5678" target="_blank" rel="noopener">n8n ↗</a>
+    </div>
+    <div id="modeBar" class="mode dry"><span class="big">…</span></div>
+  </header>
+
+  <main>
+    <div id="banners" class="grid"></div>
+
+    <div class="grid kpis" id="kpis"></div>
+
+    <div class="grid row3">
+      <div class="card" id="todayCard"><h3>Today's post</h3><div class="muted">…</div></div>
+      <div class="card" id="nextCard"><h3>Next post</h3><div class="muted">…</div></div>
+      <div class="card sched" id="scheduleCard">
+        <h3>Schedule settings <span class="muted small" style="text-transform:none;letter-spacing:0" id="tzLabel"></span></h3>
+        <div class="picker">
+          <input type="time" id="publishTime" step="60" aria-label="Daily publishing time" />
+          <button class="primary" id="saveTime" disabled>Save time</button>
+        </div>
+        <div class="note" id="timeHint"></div>
+        <div class="kv-list" id="scheduleFacts"></div>
+      </div>
+    </div>
+
+    <section class="panel">
+      <div class="head">
+        <h2>Rolling content queue</h2>
+        <span class="muted small" id="queueSummary"></span>
+        <span class="spacer"></span>
+        <span class="muted small">AI content is prepared ahead; exactly one product is published per day at the scheduled time.</span>
+      </div>
+      <div style="padding:14px"><div class="queue" id="queue"></div></div>
+    </section>
+
+    <div class="grid platforms" id="platforms"></div>
+
+    <div class="grid row3">
+      <div class="card" id="execCard"><h3>Executions</h3></div>
+      <div class="card" id="aiCard"><h3>AI provider</h3></div>
+      <div class="card" id="healthCard"><h3>Retries &amp; errors</h3></div>
+    </div>
+
+    <div class="grid row2">
+      <section class="panel">
+        <div class="head">
+          <h2>Workflow runs</h2>
+          <span class="spacer"></span>
+          <select id="runWorkflow"><option value="">All workflows</option></select>
+          <select id="runStatus">
+            <option value="">Any status</option>
+            <option value="success">success</option><option value="error">error</option><option value="running">running</option>
+            <option value="waiting">waiting</option><option value="canceled">canceled</option><option value="crashed">crashed</option>
+          </select>
+        </div>
+        <div class="scroll">
+          <table>
+            <thead><tr><th>#</th><th>Workflow</th><th>Status</th><th>Mode</th><th>Started</th><th>Duration</th></tr></thead>
+            <tbody id="runs"><tr><td colspan="6" class="empty">Loading…</td></tr></tbody>
+          </table>
+        </div>
+      </section>
+      <section class="panel">
+        <div class="head">
+          <h2 id="detailTitle">Run details</h2>
+          <span class="spacer"></span>
+          <a id="detailLink" class="small" target="_blank" rel="noopener" style="display:none">Open in n8n ↗</a>
+        </div>
+        <div class="scroll" id="detail"><div class="empty">Click a run to see every step it executed.</div></div>
+      </section>
+    </div>
+
+    <section class="panel">
+      <div class="head">
+        <h2>Products</h2>
+        <span class="spacer"></span>
+        <select id="prodStatus">
+          <option value="">Any overall status</option>
+          <option>published</option><option>partial</option><option>failed</option>
+          <option>processing</option><option>previewed</option><option>pending</option>
+        </select>
+        <input type="search" id="prodSearch" placeholder="Search ID / file…" />
+      </div>
+      <div class="scroll">
+        <table>
+          <thead><tr><th>ID</th><th>File</th><th>Type</th><th>Overall</th><th>Instagram</th><th>Facebook Page</th><th>Pinterest</th><th>YouTube Shorts</th><th>Tries</th><th>Updated</th><th></th></tr></thead>
+          <tbody id="products"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <div class="grid row2">
+      <section class="panel">
+        <div class="head">
+          <h2>Recent activity</h2>
+          <span class="spacer"></span>
+          <select id="logLevel"><option value="">All levels</option><option>info</option><option>warn</option><option>error</option></select>
+          <select id="logPlatform"><option value="">All platforms</option><option>instagram</option><option>facebook</option><option>pinterest</option><option>youtube</option></select>
+          <input type="search" id="logSearch" placeholder="Search…" />
+        </div>
+        <div class="scroll">
+          <table>
+            <thead><tr><th>Time</th><th>Level</th><th>Event</th><th>Product</th><th>Message</th></tr></thead>
+            <tbody id="logs"></tbody>
+          </table>
+        </div>
+      </section>
+      <div class="grid" style="align-content:start">
+        <section class="panel">
+          <div class="head"><h2>Workflows</h2><span class="spacer"></span><span id="wfCount" class="muted small"></span></div>
+          <div class="scroll" style="max-height:300px">
+            <table>
+              <thead><tr><th>Workflow</th><th>State</th><th>Last run</th></tr></thead>
+              <tbody id="workflows"></tbody>
+            </table>
+          </div>
+        </section>
+        <section class="panel">
+          <div class="head"><h2>Configuration (read-only)</h2></div>
+          <div class="kv-list" id="config" style="padding:12px 14px"></div>
+        </section>
+      </div>
+    </div>
+  </main>
+
+  <script>
+    const PLATFORMS = [['instagram', 'Instagram'], ['facebook', 'Facebook Page'], ['pinterest', 'Pinterest'], ['youtube', 'YouTube Shorts']];
+    const STATUS_COLORS = { published: 'var(--green)', previewed: 'var(--purple)', processing: 'var(--blue)', pending: 'var(--amber)', partial: 'var(--orange)', failed: 'var(--red)', skipped: 'var(--gray)' };
+    const ACTIVE_RUN = ['running', 'waiting', 'new'];
+    const state = { data: null, runs: [], selectedRun: null, selectedDetail: null, timer: null, timeDirty: false };
+    const $ = (id) => document.getElementById(id);
+
+    const esc = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    const chip = (status, label) => `<span class="chip s-${esc(status || 'unknown')}"><span class="dot"></span>${esc(label ?? status ?? '—')}</span>`;
+    const pill = (ok, label, warn = false) => `<span class="pill ${ok ? 'ok' : warn ? 'warn' : 'bad'}"><span class="dot"></span>${esc(label)}</span>`;
+
+    function tzFmt(value, tz, opts) {
+      if (!value) return '—';
+      const d = new Date(value);
+      if (isNaN(d)) return esc(value);
+      return d.toLocaleString('en-IN', { timeZone: tz || 'Asia/Kolkata', ...opts });
+    }
+    const fmtTime = (v) => tzFmt(v, state.tz, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    const fmtSlot = (v) => tzFmt(v, state.tz, { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+    function ago(value) {
+      if (!value) return '';
+      const s = Math.round((Date.now() - new Date(value).getTime()) / 1000);
+      const fut = s < 0, a = Math.abs(s);
+      const t = a < 60 ? `${a}s` : a < 3600 ? `${Math.round(a / 60)}m` : a < 86400 ? `${Math.round(a / 3600)}h` : `${Math.round(a / 86400)}d`;
+      return fut ? `in ${t}` : `${t} ago`;
+    }
+    function dur(ms) {
+      if (ms == null) return '—';
+      if (ms < 1000) return `${ms} ms`;
+      if (ms < 60000) return `${(ms / 1000).toFixed(1)} s`;
+      return `${Math.floor(ms / 60000)}m ${Math.round((ms % 60000) / 1000)}s`;
+    }
+    function to12h(hhmm) {
+      const [h, m] = hhmm.split(':').map(Number);
+      return `${(h % 12) || 12}:${String(m).padStart(2, '0')} ${h < 12 ? 'AM' : 'PM'}`;
+    }
+    function postLink(platform, id) {
+      if (!id || String(id).startsWith('dry')) return null;
+      switch (platform) {
+        case 'facebook': return `https://www.facebook.com/reel/${encodeURIComponent(id)}`;
+        case 'youtube': return `https://www.youtube.com/shorts/${encodeURIComponent(id)}`;
+        case 'pinterest': return `https://www.pinterest.com/pin/${encodeURIComponent(id)}/`;
+        case 'instagram': return null;
+        default: return null;
+      }
+    }
+    async function getJSON(url, options) {
+      const res = await fetch(url, { cache: 'no-store', ...options });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body.error || `${url} → ${res.status}`);
+      return body;
+    }
+    const product = (id) => (state.data?.products || []).find((p) => p.product_id === id);
+
+    function renderHeader(d) {
+      const s = d.system, sch = d.schedule, gh = sch.github_sync;
+      $('systemPills').innerHTML = [
+        pill(s.tracking_api, 'Tracking API'),
+        pill(s.database, 'Database'),
+        pill(s.n8n, 'n8n'),
+        pill(s.scheduler, s.scheduler_enabled ? 'Scheduler' : 'Scheduler off', !s.scheduler_enabled),
+        pill(gh && gh.ok, gh && gh.configured ? (gh.ok ? 'GitHub synced' : 'GitHub sync error') : 'GitHub sync not set', !(gh && gh.configured)),
+      ].join('');
+      const live = !d.config.dry_run;
+      $('modeBar').className = `mode ${live ? 'live' : 'dry'}`;
+      $('modeBar').innerHTML = live
+        ? '<span class="dot" style="background:var(--red)"></span><span class="big">LIVE MODE</span><span class="sub">— the daily run publishes to real Instagram, Facebook Page, Pinterest and YouTube accounts.</span>'
+        : '<span class="dot" style="background:var(--amber)"></span><span class="big">DRY RUN</span><span class="sub">— content is generated and tracked, but nothing is published. Set DRY_RUN=false in .env to go live.</span>';
+      $('updated').textContent = `updated ${new Date().toLocaleTimeString()}`;
+    }
+
+    function renderBanners(d, runsError) {
+      const out = [];
+      if (!d.n8n.ok) out.push(`<div class="banner err">Cannot read n8n: ${esc(d.n8n.error)}. Check N8N_OWNER_EMAIL / N8N_OWNER_PASSWORD for the tracking-api service.</div>`);
+      if (runsError) out.push(`<div class="banner err">Workflow runs unavailable: ${esc(runsError)}</div>`);
+      if (d.system.scheduler_enabled && !d.system.scheduler) out.push(`<div class="banner err">The scheduler is not ticking${d.system.scheduler_error ? `: ${esc(d.system.scheduler_error)}` : ''}. Daily posts will not start until it recovers.</div>`);
+      const failing = state.runs.filter((r) => r.status === 'error' && Date.now() - new Date(r.started_at) < 86400000);
+      if (failing.length) out.push(`<div class="banner warn">${failing.length} workflow run(s) failed in the last 24 hours — latest: #${esc(failing[0].id)} ${esc(failing[0].workflow_name)}.</div>`);
+      if (d.schedule.github_sync && d.schedule.github_sync.configured && !d.schedule.github_sync.ok) out.push(`<div class="banner warn">GitHub schedule sync failed: ${esc(d.schedule.github_sync.message)} — it retries automatically every 10 minutes.</div>`);
+      $('banners').innerHTML = out.join('');
+      $('banners').style.display = out.length ? 'grid' : 'none';
+    }
+
+    function platformCounts(d) {
+      const totals = { success: 0, failed: 0, skipped: 0 };
+      d.products.forEach((p) => PLATFORMS.forEach(([k]) => {
+        const s = p[`${k}_status`];
+        if (s === 'published') totals.success++;
+        else if (s === 'failed') totals.failed++;
+        else if (s === 'skipped') totals.skipped++;
+      }));
+      return totals;
+    }
+
+    function renderKpis(d) {
+      const p = d.products, q = d.queue;
+      const count = (fn) => p.filter(fn).length;
+      const t = platformCounts(d);
+      const ready = q.active.filter((r) => r.status === 'prepared').length;
+      const cards = [
+        ['Total products', p.length, `${count((x) => x.media_type === 'video')} video · ${count((x) => x.media_type !== 'video')} image`],
+        ['Published', count((x) => x.overall_status === 'published'), 'completed on every required platform'],
+        ['Queue ready', `${ready}/${q.queue_size}`, q.publishing ? `Product ${q.publishing.product_id} publishing now` : 'content prepared ahead'],
+        ['Platform successes', t.success, 'posts live across platforms'],
+        ['Platform failures', t.failed, t.failed ? 'retried at the next slot' : 'none'],
+        ['Skipped', t.skipped, 'not required for media type'],
+      ];
+      $('kpis').innerHTML = cards.map(([k, v, s]) => `<div class="card"><div class="k">${k}</div><div class="v">${v}</div><div class="sub">${s}</div></div>`).join('');
+    }
+
+    function productLine(id) {
+      const p = product(id);
+      return p ? `<span class="mono">${esc(p.filename)}</span> · ${esc(p.media_type)}` : '';
+    }
+
+    function renderToday(d) {
+      const q = d.queue, sch = d.schedule;
+      const todayRow = q.today;
+      const todayDate = sch.now_local.slice(0, 10);
+      const publishedToday = d.products.filter((p) => p.published_at && p.published_at.slice(0, 10) === todayDate);
+      let body;
+      if (todayRow) {
+        const p = product(todayRow.product_id) || {};
+        const plats = PLATFORMS.map(([k, label]) => `<div>${label}</div><div>${chip(p[`${k}_status`])}${p[`${k}_post_id`] ? ` <span class="mono small">${esc(p[`${k}_post_id`])}</span>` : ''}</div>`).join('');
+        body = `<div class="hero">Product ${todayRow.product_id} ${chip(todayRow.status === 'publishing' ? 'publishing' : (p.overall_status || todayRow.status))}</div>
+          <div class="small muted">${productLine(todayRow.product_id)} · claimed ${fmtTime(todayRow.claimed_at || todayRow.completed_at)}</div>
+          <div class="kv-list">${plats}</div>`;
+      } else if (publishedToday.length) {
+        body = `<div class="hero">Product ${publishedToday[0].product_id} ${chip('published')}</div><div class="small muted">${productLine(publishedToday[0].product_id)} · ${fmtTime(publishedToday[0].published_at)}</div>`;
+      } else if (sch.skipped_today) {
+        body = `<div class="hero muted">Skipped today</div><div class="small muted">The saved time had already passed when it was changed. Next post: ${fmtSlot(sch.next_run.at)}.</div>`;
+      } else {
+        body = `<div class="hero muted">Not posted yet</div><div class="small muted">Scheduled for ${esc(sch.display_12h)} ${esc(sch.timezone)} (${ago(sch.next_run.at)}).</div>`;
+      }
+      $('todayCard').innerHTML = `<h3>Today's post <span class="muted small" style="text-transform:none;letter-spacing:0">${esc(todayDate)}</span></h3>${body}`;
+    }
+
+    function renderNext(d) {
+      const q = d.queue, sch = d.schedule;
+      const head = q.head;
+      const when = sch.next_run.catch_up ? 'within a minute (catching up a missed slot)' : `${fmtSlot(sch.next_run.at)} · ${ago(sch.next_run.at)}`;
+      $('nextCard').innerHTML = `<h3>Next post</h3>
+        ${head
+          ? `<div class="hero">Product ${head.product_id} ${chip('prepared', 'content ready')}</div><div class="small muted">${productLine(head.product_id)}</div>`
+          : `<div class="hero muted">Preparing content…</div><div class="small muted">The next product in sequence is prepared automatically before the slot.</div>`}
+        <div class="kv-list">
+          <div>When</div><div>${when}</div>
+          <div>Mode</div><div>${d.config.dry_run ? 'DRY RUN (preview only)' : '<b style="color:var(--red)">LIVE publish</b>'}</div>
+          ${head ? `<div>Content</div><div>${head.has_preview ? `<a href="/previews/${head.product_id}" target="_blank" rel="noopener">view generated captions ↗</a>` : '—'}</div>` : ''}
+        </div>`;
+    }
+
+    function renderSchedule(d) {
+      const sch = d.schedule;
+      state.tz = sch.timezone;
+      $('tzLabel').textContent = `${sch.timezone} · IST`;
+      if (!state.timeDirty) $('publishTime').value = sch.publish_time;
+      updateTimeHint();
+      const gh = sch.github_sync;
+      const ghText = !gh ? '<span class="muted">not attempted yet</span>'
+        : !gh.configured ? '<span class="muted">not configured — see docs/DASHBOARD.md</span>'
+        : gh.ok ? `<span style="color:var(--green)">in sync</span> <span class="muted small">${ago(gh.at)}</span>`
+        : `<span style="color:var(--red)">${esc(gh.message)}</span>`;
+      $('scheduleFacts').innerHTML = `
+        <div>Active time</div><div><b>${esc(sch.display_12h)}</b> daily (${esc(sch.publish_time)})</div>
+        <div>Timezone</div><div>${esc(sch.timezone)}</div>
+        <div>Next run</div><div>${sch.next_run.catch_up ? 'now (catch-up)' : fmtSlot(sch.next_run.at)}</div>
+        <div>Last trigger</div><div>${sch.last_trigger ? `${fmtTime(sch.last_trigger.at)}${sch.last_trigger.execution_id ? ` · run #${esc(sch.last_trigger.execution_id)}` : ''}` : '—'}</div>
+        <div>GitHub Actions</div><div>${ghText}</div>
+        <div>Saved</div><div class="small muted">${sch.updated_at ? fmtTime(sch.updated_at) : '—'} · config/schedule.json</div>`;
+    }
+
+    function updateTimeHint() {
+      const sch = state.data?.schedule;
+      const val = $('publishTime').value;
+      const changed = sch && val && val !== sch.publish_time;
+      $('saveTime').disabled = !changed;
+      const hint = $('timeHint');
+      if (!sch || !val) { hint.textContent = ''; return; }
+      if (!changed) { hint.className = 'note'; hint.textContent = `Posts go out every day at ${to12h(sch.publish_time)} ${sch.timezone}.`; return; }
+      const nowLocal = new Date().toLocaleTimeString('en-GB', { timeZone: sch.timezone, hour: '2-digit', minute: '2-digit', hour12: false });
+      const alreadyHandled = sch.last_trigger_date === sch.now_local.slice(0, 10);
+      hint.className = 'note warn';
+      hint.textContent = alreadyHandled
+        ? `Today's post already ran. From tomorrow, posts go out at ${to12h(val)}.`
+        : val <= nowLocal
+          ? `${to12h(val)} has already passed today, so the first post at the new time is tomorrow.`
+          : `Today's post will go out at ${to12h(val)} instead of ${to12h(sch.publish_time)}.`;
+    }
+
+    async function saveTime() {
+      const val = $('publishTime').value;
+      $('saveTime').disabled = true;
+      $('timeHint').className = 'note';
+      $('timeHint').textContent = 'Saving…';
+      try {
+        const res = await getJSON('/schedule', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ publish_time: val }) });
+        state.timeDirty = false;
+        const gh = res.github_sync || {};
+        $('timeHint').className = gh.configured && !gh.ok ? 'note warn' : 'note ok';
+        $('timeHint').textContent = `Saved: daily at ${to12h(res.publish_time)} ${res.timezone}. ` + (gh.configured ? (gh.ok ? 'GitHub Actions schedule updated.' : `GitHub sync pending: ${gh.message}`) : 'GitHub sync is not configured, so only this PC follows the new time.');
+        await refresh(true);
+      } catch (e) {
+        $('timeHint').className = 'note err';
+        $('timeHint').textContent = `Could not save: ${e.message}`;
+        $('saveTime').disabled = false;
+      }
+    }
+
+    function renderQueue(d) {
+      const q = d.queue;
+      const ready = q.active.filter((r) => r.status === 'prepared').length;
+      $('queueSummary').textContent = `${ready} of ${q.queue_size} ready${q.publishing ? ' · 1 publishing' : ''}`;
+      const slots = q.active.slice(0, Math.max(q.queue_size, q.active.length));
+      const html = slots.map((r, i) => {
+        const isHead = q.head && r.product_id === q.head.product_id;
+        return `<div class="slot ${isHead ? 'head' : ''}">
+          <span class="pos">${r.status === 'publishing' ? 'NOW' : isHead ? 'NEXT' : `#${i + 1}`}</span>
+          <div class="pid">Product ${r.product_id}</div>
+          <div class="small muted mono">${esc(r.filename || '')} · ${esc(r.media_type || '')}</div>
+          <div style="margin-top:6px">${chip(r.status)} ${r.reused_preview ? '<span class="chip">reused content</span>' : ''}</div>
+          <div class="small muted" style="margin-top:6px">prepared ${ago(r.prepared_at)}${r.claim_count ? ` · ${r.claim_count} attempt(s)` : ''}</div>
+          ${r.last_error ? `<div class="err">${esc(r.last_error)}</div>` : ''}
+          ${r.has_preview ? `<div class="small" style="margin-top:4px"><a href="/previews/${r.product_id}" target="_blank" rel="noopener">content ↗</a></div>` : ''}
+        </div>`;
+      });
+      for (let i = slots.length; i < q.queue_size; i++) html.push('<div class="slot empty"><div>Empty slot<br><span class="small">filled automatically by 16 Content Queue Preparer</span></div></div>');
+      $('queue').innerHTML = html.join('');
+    }
+
+    function renderPlatforms(d) {
+      $('platforms').innerHTML = PLATFORMS.map(([key, label]) => {
+        const counts = {};
+        d.products.forEach((p) => { const s = p[`${key}_status`] || 'pending'; counts[s] = (counts[s] || 0) + 1; });
+        const total = d.products.length || 1;
+        const order = ['published', 'failed', 'skipped', 'previewed', 'processing', 'pending', 'partial'];
+        const keys = [...order.filter((s) => counts[s]), ...Object.keys(counts).filter((s) => !order.includes(s))];
+        const latest = d.products.filter((p) => p[`${key}_status`] === 'published').sort((a, b) => (b.updated_at || '').localeCompare(a.updated_at || ''))[0];
+        const link = latest ? postLink(key, latest[`${key}_post_id`]) : null;
+        return `<div class="card">
+          <h3>${label} <span class="small" style="color:var(--green);text-transform:none;letter-spacing:0">${counts.published || 0} live</span></h3>
+          <div class="pbar">${keys.map((s) => `<span title="${s}: ${counts[s]}" style="width:${(counts[s] / total) * 100}%;background:${STATUS_COLORS[s] || 'var(--gray)'}"></span>`).join('')}</div>
+          <div class="legend">
+            <span><b>${counts.published || 0}</b> success</span><span><b>${counts.failed || 0}</b> failed</span><span><b>${counts.skipped || 0}</b> skipped</span>
+            <span><b>${(counts.pending || 0) + (counts.previewed || 0) + (counts.processing || 0)}</b> waiting</span>
+          </div>
+          <div class="sub small" style="margin-top:8px">${latest ? `Latest: Product ${latest.product_id} · <span class="mono">${esc(latest[`${key}_post_id`] || '')}</span>${link ? ` · <a href="${link}" target="_blank" rel="noopener">open ↗</a>` : ''}` : 'Nothing published yet'}</div>
+        </div>`;
+      }).join('');
+    }
+
+    function execLine(label, ex) {
+      if (!ex) return `<div>${label}</div><div class="muted">no runs yet</div>`;
+      return `<div>${label}</div><div>${chip(ex.status)} <a href="#" data-run="${esc(ex.id)}">#${esc(ex.id)}</a> <span class="muted small">${fmtTime(ex.started_at)} · ${dur(ex.duration_ms)}</span></div>`;
+    }
+
+    function renderExec(d) {
+      const sch = d.schedule;
+      $('execCard').innerHTML = `<h3>Executions</h3>
+        <div class="kv-list">
+          ${execLine('Last daily run', d.n8n.daily_last)}
+          <div>Next daily run</div><div>${sch.next_run.catch_up ? 'now (catch-up)' : `${fmtSlot(sch.next_run.at)} <span class="muted small">${ago(sch.next_run.at)}</span>`}</div>
+          ${execLine('Last prepare run', d.n8n.preparer_last)}
+          <div>Runs (24h)</div><div>${state.runs.filter((r) => Date.now() - new Date(r.started_at) < 86400000).length} total · ${state.runs.filter((r) => r.status === 'error' && Date.now() - new Date(r.started_at) < 86400000).length} failed</div>
+        </div>`;
+      const c = d.config, ai = d.ai_last;
+      $('aiCard').innerHTML = `<h3>AI provider</h3>
+        <div class="kv-list">
+          <div>Primary</div><div>${esc(c.ai_provider)} · <span class="mono">${esc(c.gemini_model)}</span></div>
+          <div>Fallback</div><div>${esc(c.ai_fallback_provider || 'none')} · <span class="mono">${esc(c.groq_model || '')}</span></div>
+          <div>Last used</div><div>${ai ? `${chip(ai.provider === 'groq' ? 'partial' : 'success', ai.provider || 'unknown')} <span class="mono small">${esc(ai.model || '')}</span>` : '—'}</div>
+          <div>For</div><div>${ai ? `Product ${ai.product_id} · ${fmtTime(ai.at)}` : '—'}</div>
+          ${ai && ai.fallback_reason ? `<div>Fallback why</div><div class="small" style="color:var(--amber)">${esc(ai.fallback_reason)}</div>` : ''}
+        </div>`;
+      const retried = d.products.filter((p) => (p.attempt_count || 0) > 1);
+      const failedProducts = d.products.filter((p) => ['failed', 'partial'].includes(p.overall_status));
+      const queueErrors = d.queue.active.filter((r) => r.last_error);
+      $('healthCard').innerHTML = `<h3>Retries &amp; errors</h3>
+        <div class="kv-list">
+          <div>Error events (24h)</div><div><b style="color:${d.errors_24h ? 'var(--red)' : 'var(--green)'}">${d.errors_24h}</b></div>
+          <div>Products retried</div><div>${retried.length}${retried.length ? ` <span class="muted small">(${retried.slice(0, 5).map((p) => `#${p.product_id}×${p.attempt_count}`).join(', ')})</span>` : ''}</div>
+          <div>Failed / partial</div><div>${failedProducts.length ? failedProducts.map((p) => `#${p.product_id} ${chip(p.overall_status)}`).join(' ') : '<span style="color:var(--green)">none</span>'}</div>
+          <div>Queue retries</div><div>${queueErrors.length ? queueErrors.map((r) => `#${r.product_id}`).join(', ') : 'none'}</div>
+        </div>
+        ${failedProducts.find((p) => p.error_message) ? `<div class="err" style="margin-top:8px">${esc(failedProducts.find((p) => p.error_message).error_message).slice(0, 220)}</div>` : ''}`;
+    }
+
+    function renderProducts(d) {
+      const q = $('prodSearch').value.trim().toLowerCase();
+      const st = $('prodStatus').value;
+      const rows = d.products
+        .filter((p) => !st || p.overall_status === st)
+        .filter((p) => !q || String(p.product_id) === q || (p.filename || '').toLowerCase().includes(q))
+        .sort((a, b) => b.product_id - a.product_id);
+      $('products').innerHTML = rows.length ? rows.map((p) => {
+        const cells = PLATFORMS.map(([key]) => {
+          const status = p[`${key}_status`], id = p[`${key}_post_id`];
+          const link = status === 'published' ? postLink(key, id) : null;
+          const idLine = id ? `<span class="postid mono" title="${esc(id)}">${link ? `<a href="${link}" target="_blank" rel="noopener">${esc(id)} ↗</a>` : esc(id)}</span>` : '';
+          return `<td>${chip(status)}${idLine}</td>`;
+        }).join('');
+        const err = p.error_message ? `<div class="err">${esc(p.error_message).slice(0, 160)}</div>` : '';
+        return `<tr>
+          <td><b>${p.product_id}</b></td>
+          <td class="mono">${esc(p.filename)}${err}</td>
+          <td>${esc(p.media_type)}</td>
+          <td>${chip(p.overall_status)}</td>
+          ${cells}
+          <td>${p.attempt_count ?? 0}</td>
+          <td class="small" title="${esc(p.updated_at)}">${ago(p.updated_at)}</td>
+          <td class="small">${p.has_preview ? `<a href="/previews/${p.product_id}" target="_blank" rel="noopener">content</a>` : ''}</td>
+        </tr>`;
+      }).join('') : '<tr><td colspan="11" class="empty">No products match.</td></tr>';
+    }
+
+    function renderLogs(d) {
+      const lvl = $('logLevel').value, plat = $('logPlatform').value, q = $('logSearch').value.trim().toLowerCase();
+      const rows = d.logs.filter((l) => (!lvl || (l.level || '').startsWith(lvl)) && (!plat || l.platform === plat)
+        && (!q || `${l.event} ${l.message} ${l.product_id ?? ''} ${l.details ?? ''}`.toLowerCase().includes(q)));
+      $('logs').innerHTML = rows.length ? rows.map((l) => `<tr>
+          <td class="small" title="${esc(l.ts)}" style="white-space:nowrap">${fmtTime(l.ts)}</td>
+          <td class="log-lvl-${esc(l.level)}">${esc(l.level)}</td>
+          <td class="mono">${esc(l.event)}${l.platform ? ` <span class="muted">· ${esc(l.platform)}</span>` : ''}</td>
+          <td>${l.product_id ?? ''}</td>
+          <td>${esc(l.message)}${l.details ? `<details><summary>details</summary><pre>${esc(l.details)}</pre></details>` : ''}</td>
+        </tr>`).join('') : '<tr><td colspan="5" class="empty">No activity matches.</td></tr>';
+    }
+
+    function renderWorkflows(d) {
+      const lastRun = {};
+      state.runs.forEach((r) => { if (!lastRun[r.workflow_id]) lastRun[r.workflow_id] = r; });
+      const wfs = d.n8n.workflows;
+      $('wfCount').textContent = `${wfs.filter((w) => w.active).length} active / ${wfs.length}`;
+      $('workflows').innerHTML = wfs.length ? wfs.map((w) => {
+        const r = lastRun[w.id];
+        return `<tr>
+          <td><a href="http://localhost:5678/workflow/${encodeURIComponent(w.id)}" target="_blank" rel="noopener">${esc(w.name)}</a></td>
+          <td>${w.active ? chip('success', 'active') : chip('skipped', 'inactive')}</td>
+          <td class="small">${r ? `${chip(r.status)} <span class="muted">${ago(r.started_at)}</span>` : '<span class="muted">—</span>'}</td>
+        </tr>`;
+      }).join('') : '<tr><td colspan="3" class="empty">No workflows (n8n unreachable?)</td></tr>';
+      const sel = $('runWorkflow'), current = sel.value;
+      sel.innerHTML = '<option value="">All workflows</option>' + wfs.map((w) => `<option value="${esc(w.id)}">${esc(w.name)}</option>`).join('');
+      sel.value = current;
+    }
+
+    function renderConfig(d) {
+      const c = d.config;
+      const yes = (v) => (v ? chip('success', 'set') : chip('failed', 'missing'));
+      $('config').innerHTML = [
+        ['Mode', c.dry_run ? 'DRY_RUN (preview only)' : 'LIVE publishing'],
+        ['YouTube', `Shorts only · ${esc(c.youtube_privacy_status)}`],
+        ['Drive folder', yes(c.drive_folder_set)],
+        ['Facebook Page ID', yes(c.facebook_page_id_set)],
+        ['Instagram account', yes(c.instagram_account_set)],
+        ['Pinterest board', yes(c.pinterest_board_set)],
+      ].map(([k, v]) => `<div>${k}</div><div>${v}</div>`).join('');
+    }
+
+    function renderRuns() {
+      $('runs').innerHTML = state.runs.length ? state.runs.map((r) => `<tr class="clickable ${String(r.id) === String(state.selectedRun) ? 'selected' : ''}" data-id="${esc(r.id)}">
+          <td class="muted">${esc(r.id)}</td>
+          <td>${esc(r.workflow_name)}</td>
+          <td>${chip(r.status)}</td>
+          <td class="muted small">${esc(r.mode)}${r.retry_of ? ` · retry of #${esc(r.retry_of)}` : ''}</td>
+          <td class="small" title="${esc(r.started_at)}">${fmtTime(r.started_at)} <span class="muted">${ago(r.started_at)}</span></td>
+          <td class="small">${dur(r.duration_ms)}</td>
+        </tr>`).join('') : '<tr><td colspan="6" class="empty">No runs found.</td></tr>';
+    }
+
+    function renderDetail() {
+      const d = state.selectedDetail;
+      if (!d) return;
+      $('detailTitle').innerHTML = `Run #${esc(d.id)} · ${esc(d.workflow_name)} ${chip(d.status)}`;
+      $('detailLink').style.display = '';
+      $('detailLink').href = `http://localhost:5678/workflow/${encodeURIComponent(d.workflow_id)}/executions/${encodeURIComponent(d.id)}`;
+      const head = `<div style="padding:10px 14px;border-bottom:1px solid var(--line)" class="small muted">
+          Started ${fmtTime(d.started_at)} · took ${dur(d.duration_ms)} · ${d.steps.length} step(s)${d.last_node ? ` · last node <b style="color:var(--text)">${esc(d.last_node)}</b>` : ''}
+          ${d.error ? `<div class="err">${esc(d.error)}</div>` : ''}
+        </div>`;
+      const steps = d.steps.map((s) => {
+        const kv = Object.entries(s.summary || {}).map(([k, v]) => `<span title="${esc(v)}">${esc(k)}: <b>${esc(v)}</b></span>`).join('');
+        return `<div class="step">
+          <span class="s-${esc(s.status)}"><span class="dot" style="margin-top:6px"></span></span>
+          <div>
+            <div class="name">${esc(s.node)}${s.run ? ` <span class="muted small">(run ${s.run + 1})</span>` : ''}</div>
+            ${kv ? `<div class="kv">${kv}</div>` : ''}
+            ${s.error ? `<div class="err">${esc(s.error)}</div>` : ''}
+          </div>
+          <div class="meta">${dur(s.duration_ms)}<br>${s.items} item${s.items === 1 ? '' : 's'}</div>
+        </div>`;
+      }).join('');
+      $('detail').innerHTML = head + `<div class="steps">${steps || '<div class="empty">No node data saved for this run.</div>'}</div>`;
+    }
+
+    async function loadDetail(id) {
+      state.selectedRun = id;
+      renderRuns();
+      $('detail').innerHTML = '<div class="empty">Loading steps…</div>';
+      try {
+        state.selectedDetail = await getJSON(`/dashboard/executions/${encodeURIComponent(id)}`);
+        renderDetail();
+      } catch (e) {
+        $('detail').innerHTML = `<div class="empty" style="color:var(--red)">${esc(e.message)}</div>`;
+      }
+    }
+
+    async function refresh(skipDetail = false) {
+      const params = new URLSearchParams({ limit: '100' });
+      if ($('runWorkflow').value) params.set('workflow_id', $('runWorkflow').value);
+      if ($('runStatus').value) params.set('status', $('runStatus').value);
+      const [dataRes, runsRes] = await Promise.allSettled([getJSON('/dashboard/data'), getJSON(`/dashboard/executions?${params}`)]);
+      if (dataRes.status !== 'fulfilled') {
+        $('banners').style.display = 'grid';
+        $('banners').innerHTML = `<div class="banner err">Tracking API error: ${esc(dataRes.reason.message)}</div>`;
+        return;
+      }
+      state.data = dataRes.value;
+      state.runs = runsRes.status === 'fulfilled' ? runsRes.value.executions : [];
+      const d = state.data;
+      renderSchedule(d);
+      renderHeader(d);
+      renderBanners(d, runsRes.status === 'rejected' ? runsRes.reason.message : null);
+      renderKpis(d);
+      renderToday(d);
+      renderNext(d);
+      renderQueue(d);
+      renderPlatforms(d);
+      renderExec(d);
+      renderRuns();
+      renderProducts(d);
+      renderLogs(d);
+      renderWorkflows(d);
+      renderConfig(d);
+      if (skipDetail) return;
+      const sel = state.runs.find((r) => String(r.id) === String(state.selectedRun));
+      if (sel && state.selectedDetail && (ACTIVE_RUN.includes(state.selectedDetail.status) || sel.status !== state.selectedDetail.status)) loadDetail(sel.id);
+    }
+
+    function schedule() {
+      clearInterval(state.timer);
+      if ($('auto').checked) state.timer = setInterval(refresh, 10000);
+    }
+
+    $('runs').addEventListener('click', (e) => { const tr = e.target.closest('tr[data-id]'); if (tr) loadDetail(tr.dataset.id); });
+    $('execCard').addEventListener('click', (e) => { const a = e.target.closest('a[data-run]'); if (a) { e.preventDefault(); loadDetail(a.dataset.run); $('detail').scrollIntoView({ behavior: 'smooth', block: 'center' }); } });
+    $('refresh').addEventListener('click', () => refresh());
+    $('auto').addEventListener('change', schedule);
+    $('publishTime').addEventListener('input', () => { state.timeDirty = true; updateTimeHint(); });
+    $('saveTime').addEventListener('click', saveTime);
+    ['runWorkflow', 'runStatus'].forEach((id) => $(id).addEventListener('change', () => refresh()));
+    ['prodSearch', 'prodStatus'].forEach((id) => $(id).addEventListener('input', () => state.data && renderProducts(state.data)));
+    ['logLevel', 'logPlatform', 'logSearch'].forEach((id) => $(id).addEventListener('input', () => state.data && renderLogs(state.data)));
+
+    refresh().then(() => { if (state.runs[0]) loadDetail(state.runs[0].id); });
+    schedule();
+  </script>
+</body>
+</html>

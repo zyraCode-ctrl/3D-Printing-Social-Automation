@@ -14,7 +14,7 @@
         -240
       ],
       "parameters": {
-        "content": "## Facebook Page (official Meta Graph API)\n\nPublishes to a Page:\n- Images: `POST /{page-id}/photos`\n- Videos: `POST /{page-id}/videos`\n\nRequires:\n- n8n credential **Facebook Graph account** (Page access token with `pages_manage_posts`)\n- `FACEBOOK_PAGE_ID` and `META_GRAPH_VERSION` in `.env`\n\n`DRY_RUN=true` stops at Duplicate Check \u2014 nothing is posted.\n",
+        "content": "## Facebook Page (official Meta Graph API)\n\nPublishes to a Page:\n- Images: `POST /{page-id}/photos`\n- Videos: `POST /{page-id}/videos`\n\nPage-only guard: fetches the Page token for `FACEBOOK_PAGE_ID`, checks `GET /me` with that\ntoken returns the same Page id, posts with the Page token, then verifies the post `from.id`.\nNever posts as a personal profile.\n\nRequires:\n- n8n credential **Facebook Graph account** (user or Page token that can read the Page `access_token`, with `pages_manage_posts`)\n- `FACEBOOK_PAGE_ID` and `META_GRAPH_VERSION` in `.env`\n\n`DRY_RUN=true` stops at Duplicate Check \u2014 nothing is posted.\n",
         "width": 360,
         "height": 320,
         "color": 4
@@ -145,25 +145,21 @@
       }
     },
     {
-      "id": "f9a51183-45ea-5d3f-9d4a-17e7d14b2c93",
-      "name": "Publish Official API",
+      "id": "ed29ac89-4236-5ae5-907e-0e4101d79f8b",
+      "name": "Get Page Token",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.5,
       "position": [
-        1480,
+        1340,
         -120
       ],
       "parameters": {
-        "method": "POST",
-        "url": "={{ $json.publish_url }}",
+        "method": "GET",
+        "url": "={{ 'https://graph.facebook.com/' + ($('Prepare Facebook Job').first().json.config.meta_graph_version || 'v22.0') + '/' + $('Prepare Facebook Job').first().json.config.facebook_page_id + '?fields=id,name,access_token' }}",
         "authentication": "predefinedCredentialType",
         "nodeCredentialType": "facebookGraphApi",
-        "sendBody": true,
-        "contentType": "raw",
-        "rawContentType": "application/json",
-        "body": "={{ JSON.stringify($json.publish_body) }}",
         "options": {
-          "timeout": 180000
+          "timeout": 60000
         }
       },
       "credentials": {
@@ -175,16 +171,148 @@
       "onError": "continueRegularOutput"
     },
     {
+      "id": "e7ef3ba0-0134-520e-93bf-91ea62089c24",
+      "name": "Verify Page Identity",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        1520,
+        -120
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "={{ 'https://graph.facebook.com/' + ($('Prepare Facebook Job').first().json.config.meta_graph_version || 'v22.0') + '/me?fields=id,name' }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "={{ 'OAuth ' + ($('Get Page Token').first().json.access_token || 'missing') }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "8611db06-3dbe-55e3-ba8a-65eea3dda78e",
+      "name": "Page Guard",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1700,
+        -120
+      ],
+      "parameters": {
+        "jsCode": "const expected = String($('Prepare Facebook Job').first().json.config.facebook_page_id || '');\nconst page = $('Get Page Token').first().json;\nconst me = $json;\nconst errText = (r) => r && r.error ? String(r.error.description || r.error.message || JSON.stringify(r.error)).slice(0, 300) : null;\nlet error = null;\nif (!expected) error = 'FACEBOOK_PAGE_ID is not configured';\nelse if (errText(page)) error = 'Cannot read Page ' + expected + ': ' + errText(page);\nelse if (String(page.id) !== expected) error = 'Page lookup returned ' + page.id + ', expected ' + expected;\nelse if (!page.access_token) error = 'No Page access token for ' + expected + ' (grant pages_show_list / pages_manage_posts for this Page)';\nelse if (errText(me)) error = 'Page token check failed: ' + errText(me);\nelse if (String(me.id) !== expected) error = 'Token acts as ' + me.name + ' (' + me.id + '), not Page ' + expected;\nreturn [{ json: { guard_ok: !error, error, page_id: expected, page_name: page.name || null } }];\n"
+      }
+    },
+    {
+      "id": "177d412f-cf63-59e5-8b4c-352cd7af4708",
+      "name": "Page Verified?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        1900,
+        -120
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "eb2ef3fb-8ba2-5515-ba45-5815eba5ac49",
+              "leftValue": "={{ $json.guard_ok }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "f9a51183-45ea-5d3f-9d4a-17e7d14b2c93",
+      "name": "Publish Official API",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        2120,
+        -200
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Prepare Facebook Job').first().json.publish_url }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "={{ 'OAuth ' + ($('Get Page Token').first().json.access_token || 'missing') }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ JSON.stringify($('Prepare Facebook Job').first().json.publish_body) }}",
+        "options": {
+          "timeout": 180000
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "c6c7d1a0-5958-5b11-9072-ab9fa03f91ee",
+      "name": "Verify Post Owner",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        2340,
+        -200
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "={{ 'https://graph.facebook.com/' + $('Prepare Facebook Job').first().json.config.meta_graph_version + '/' + ($json.post_id || $json.id || 'missing') + '?fields=id,from{id,name},permalink_url' }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "={{ 'OAuth ' + ($('Get Page Token').first().json.access_token || 'missing') }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
       "id": "3f8b1198-036b-5ff2-85ea-a71d433f33b5",
       "name": "Interpret Result",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        1720,
+        2560,
         -120
       ],
       "parameters": {
-        "jsCode": "const prepared = $('Prepare Facebook Job').first().json;\nconst response = $json;\nif (response.error) {\n  return [{ json: {\n    product_id: prepared.product_id,\n    platform: 'facebook',\n    status: 'failed',\n    error_message: response.error.message || JSON.stringify(response.error)\n  } }];\n}\nconst postId = response.id || response.post_id || null;\nif (!postId) {\n  return [{ json: {\n    product_id: prepared.product_id,\n    platform: 'facebook',\n    status: 'failed',\n    error_message: 'No Facebook post id in response: ' + JSON.stringify(response).slice(0, 400)\n  } }];\n}\nreturn [{ json: {\n  product_id: prepared.product_id,\n  platform: 'facebook',\n  status: 'published',\n  post_id: String(postId)\n} }];\n"
+        "jsCode": "const prepared = $('Prepare Facebook Job').first().json;\nconst guard = $('Page Guard').first().json;\nconst pageId = String(prepared.config.facebook_page_id);\nconst base = { product_id: prepared.product_id, platform: 'facebook' };\nconst errText = (r) => r && r.error ? String(r.error.description || r.error.message || JSON.stringify(r.error)).slice(0, 400) : null;\nif (!guard.guard_ok) return [{ json: { ...base, status: 'failed', error_message: 'Not posted: ' + guard.error } }];\nlet response = {};\nlet owner = {};\ntry { response = $('Publish Official API').first().json; } catch (e) {}\ntry { owner = $('Verify Post Owner').first().json; } catch (e) {}\nconst postId = response.post_id || response.id || null;\nif (errText(response) || !postId) {\n  return [{ json: { ...base, status: 'failed', error_message: errText(response) || ('No Facebook post id in response: ' + JSON.stringify(response).slice(0, 400)) } }];\n}\nconst ownerId = owner.from ? String(owner.from.id) : null;\nif (ownerId && ownerId !== pageId) {\n  return [{ json: { ...base, status: 'failed', post_id: String(postId), error_message: 'Posted as ' + owner.from.name + ' (' + ownerId + '), not Page ' + pageId + '. Delete it manually.' } }];\n}\nreturn [{ json: { ...base, status: 'published', post_id: String(postId), owner_verified: ownerId === pageId, permalink_url: owner.permalink_url || null } }];\n"
       }
     },
     {
@@ -275,7 +403,58 @@
       "main": [
         [
           {
+            "node": "Get Page Token",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Page Token": {
+      "main": [
+        [
+          {
+            "node": "Verify Page Identity",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Verify Page Identity": {
+      "main": [
+        [
+          {
+            "node": "Page Guard",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Page Guard": {
+      "main": [
+        [
+          {
+            "node": "Page Verified?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Page Verified?": {
+      "main": [
+        [
+          {
             "node": "Publish Official API",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Interpret Result",
             "type": "main",
             "index": 0
           }
@@ -283,6 +462,17 @@
       ]
     },
     "Publish Official API": {
+      "main": [
+        [
+          {
+            "node": "Verify Post Owner",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Verify Post Owner": {
       "main": [
         [
           {

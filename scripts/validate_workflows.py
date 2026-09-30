@@ -99,6 +99,22 @@ def validate_production_ai(ai_path: Path, daily_path: Path) -> list[str]:
     return errors
 
 
+def validate_daily_schedule(daily_path: Path) -> list[str]:
+    daily = json.loads(daily_path.read_text(encoding="utf-8"))
+    blob = json.dumps(daily)
+    errors: list[str] = []
+    if any(n.get("type") == "n8n-nodes-base.scheduleTrigger" for n in daily.get("nodes", [])):
+        errors.append(f"{daily_path.name}: must not hard-code a schedule trigger (config/schedule.json is the source of truth)")
+    if "/queue/claim" not in blob:
+        errors.append(f"{daily_path.name}: must publish the head of the prepared content queue")
+    if "3dprQueuePrep016" not in blob:
+        errors.append(f"{daily_path.name}: must fall back to 16 Content Queue Preparer when the queue is empty")
+    for name in ("Publish Instagram", "Publish Facebook", "Publish Pinterest", "Publish YouTube", "Finalize Product", "Finalize Dry Run"):
+        if name not in blob:
+            errors.append(f"{daily_path.name}: {name} node is missing")
+    return errors
+
+
 def main() -> None:
     files = sorted(ROOT.glob("*.json"))
     if not files:
@@ -110,11 +126,14 @@ def main() -> None:
         status = "OK" if not file_errors else "FAIL"
         print(f"{status} {path.name}")
     ai_path = ROOT / "03-ai-content.json"
-    daily_path = ROOT / "01-daily-publisher.json"
-    if ai_path.exists() and daily_path.exists():
-        ai_errors = validate_production_ai(ai_path, daily_path)
+    prep_path = ROOT / "16-queue-preparer.json"
+    if ai_path.exists() and prep_path.exists():
+        ai_errors = validate_production_ai(ai_path, prep_path)
         errors.extend(ai_errors)
         print("OK production AI uses Gemini" if not ai_errors else "FAIL production AI checks")
+    daily_errors = validate_daily_schedule(ROOT / "01-daily-publisher.json")
+    errors.extend(daily_errors)
+    print("OK daily publisher follows the dashboard schedule + queue" if not daily_errors else "FAIL daily publisher checks")
     if errors:
         raise SystemExit("\n".join(errors))
     print(f"Validated {len(files)} workflow files.")

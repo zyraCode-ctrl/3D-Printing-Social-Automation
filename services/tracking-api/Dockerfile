@@ -1,9 +1,10 @@
 FROM python:3.12-alpine
 
-RUN apk add --no-cache ffmpeg
+RUN apk add --no-cache ffmpeg tzdata
 
 WORKDIR /app
 COPY services/tracking-api/server.py /app/server.py
+COPY services/tracking-api/dashboard.html /app/dashboard.html
 COPY db/schema.sql /app/schema.sql
 
 ENV PYTHONUNBUFFERED=1

@@ -1,0 +1,180 @@
+{
+  "id": "3dprGroqAuthProbe12",
+  "name": "12 Groq Auth Probe",
+  "active": false,
+  "isArchived": false,
+  "nodes": [
+    {
+      "id": "b896ffb2-794c-52c1-b7ac-65845116829c",
+      "name": "Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -400,
+        -220
+      ],
+      "parameters": {
+        "content": "## Groq Auth Probe\n\nManual test only. Uses **Groq account** (Header Auth `Authorization: Bearer <key>`).\nLists models and sends one tiny JSON-mode request to `GROQ_MODEL`. No post, no preview.\n",
+        "width": 380,
+        "height": 220,
+        "color": 5
+      }
+    },
+    {
+      "id": "13f81788-57e2-5789-b62d-634d4abf8dc2",
+      "name": "Run Manually",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {}
+    },
+    {
+      "id": "5b731862-470f-534a-a386-057017605e11",
+      "name": "Load Config",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        240,
+        0
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "http://tracking-api:8081/config",
+        "options": {
+          "timeout": 60000
+        }
+      }
+    },
+    {
+      "id": "add9e66f-840b-5163-a163-aae794fbe52c",
+      "name": "List Models",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        480,
+        0
+      ],
+      "parameters": {
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {
+          "timeout": 60000
+        },
+        "method": "GET",
+        "url": "https://api.groq.com/openai/v1/models"
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "httpHeaderAuth",
+          "name": "Groq account"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "05782f58-a0c7-51ca-a581-8634cdaaa9b1",
+      "name": "JSON Test Call",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        720,
+        0
+      ],
+      "parameters": {
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {
+          "timeout": 60000
+        },
+        "method": "POST",
+        "url": "https://api.groq.com/openai/v1/chat/completions",
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ JSON.stringify({ model: $('Load Config').first().json.groq_model || 'qwen/qwen3.8-27b', messages: [{ role: 'user', content: 'Return JSON only: {\"ok\": true}' }], response_format: { type: 'json_object' }, max_completion_tokens: 50, ...((($('Load Config').first().json.groq_model || 'qwen/').startsWith('qwen/')) ? { reasoning_effort: 'none' } : {}) }) }}"
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "httpHeaderAuth",
+          "name": "Groq account"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "df3b4d41-331e-5e88-9bca-e8263175ee97",
+      "name": "Summarize Probe",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        960,
+        0
+      ],
+      "parameters": {
+        "jsCode": "const config = $('Load Config').first().json;\nconst models = $('List Models').first().json;\nconst chat = $json;\nconst errText = (r) => r && r.error ? String(r.error.description || r.error.message || JSON.stringify(r.error)).slice(0, 300) : null;\nconst ids = (models.data || []).map((m) => m.id);\nconst wanted = config.groq_model || 'qwen/qwen3.8-27b';\nconst reply = (((chat.choices || [])[0] || {}).message || {}).content || null;\nreturn [{ json: {\n  dry_run: config.dry_run,\n  ai_fallback_provider: config.ai_fallback_provider,\n  groq_model: wanted,\n  key_ok: !models.error && ids.length > 0,\n  models_count: ids.length,\n  model_available: ids.includes(wanted),\n  json_call_ok: !chat.error && Boolean(reply),\n  reply,\n  models_error: errText(models),\n  chat_error: errText(chat),\n} }];\n"
+      }
+    }
+  ],
+  "connections": {
+    "Run Manually": {
+      "main": [
+        [
+          {
+            "node": "Load Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Config": {
+      "main": [
+        [
+          {
+            "node": "List Models",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "List Models": {
+      "main": [
+        [
+          {
+            "node": "JSON Test Call",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "JSON Test Call": {
+      "main": [
+        [
+          {
+            "node": "Summarize Probe",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Asia/Kolkata",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false,
+    "errorWorkflow": "3dprErrorLog008"
+  },
+  "pinData": {},
+  "versionId": "ba10d858-fdd8-5e3f-9a8d-65353ccdd17b",
+  "meta": {
+    "templateCredsSetupCompleted": false
+  },
+  "tags": []
+}

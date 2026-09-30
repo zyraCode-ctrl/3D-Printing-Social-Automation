@@ -1,6 +1,5 @@
 {
   "timezone": "Asia/Kolkata",
-  "daily_cron": "0 9 * * *",
   "markets": ["United States", "Canada", "United Kingdom", "Australia"],
   "supported_images": ["jpg", "jpeg", "png", "webp"],
   "supported_videos": ["mp4", "mov"],

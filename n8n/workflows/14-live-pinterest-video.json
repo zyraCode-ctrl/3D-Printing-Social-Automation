@@ -1,0 +1,543 @@
+{
+  "id": "3dprLivePinVid014",
+  "name": "14 Live Pinterest Video Pin",
+  "active": false,
+  "isArchived": false,
+  "nodes": [
+    {
+      "id": "ddbce8d2-7452-5d34-995f-c1eabc5c069b",
+      "name": "Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -420,
+        -300
+      ],
+      "parameters": {
+        "content": "## LIVE Pinterest Video Pin (manual only)\n\nPosts **Product 17** as a video Pin to `PINTEREST_BOARD_ID`:\n1. `POST /v5/media` (media_type video)\n2. tracking-api uploads the local file to the returned S3 form\n3. Poll `GET /v5/media/{id}` until `succeeded`\n4. `POST /v5/pins` with `media_source.source_type = video_id`\n\nDoes not change global `DRY_RUN`. Refuses if already published on Pinterest.\n",
+        "width": 400,
+        "height": 300,
+        "color": 3
+      }
+    },
+    {
+      "id": "76f3f207-319b-55c1-a0b7-3f5d68b5d249",
+      "name": "Run Manually",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {}
+    },
+    {
+      "id": "a71268aa-010a-517e-8bac-e13dbb3e737a",
+      "name": "Load Config",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        200,
+        0
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "http://tracking-api:8081/config",
+        "options": {
+          "timeout": 60000
+        }
+      }
+    },
+    {
+      "id": "c3ca20f2-83df-556c-8ff7-4d1d7ccf77ac",
+      "name": "Load Preview",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        400,
+        0
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "http://tracking-api:8081/previews/17",
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "66b6e195-b8ec-51b4-8253-924d3505f9a1",
+      "name": "Load Product",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        600,
+        0
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "http://tracking-api:8081/products/17",
+        "options": {
+          "timeout": 60000
+        }
+      }
+    },
+    {
+      "id": "7d42d3e4-c25b-5d75-90dd-a114472a28ca",
+      "name": "Prepare Pin Job",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        800,
+        0
+      ],
+      "parameters": {
+        "jsCode": "const pid = 17;\nconst config = $('Load Config').first().json;\nconst preview = $('Load Preview').first().json;\nconst record = $('Load Product').first().json;\nif (!preview || preview.error || !preview.content) throw new Error('No saved AI preview for Product ' + pid + '.');\nif (String(preview.media_type) !== 'video') throw new Error('Product ' + pid + ' is not a video.');\nif (record.pinterest_status === 'published' || record.pinterest_post_id) throw new Error('Product ' + pid + ' is already published on Pinterest. Refusing duplicate.');\nif (!config.pinterest_board_id) throw new Error('PINTEREST_BOARD_ID is missing.');\nconst p = preview.content.pinterest || {};\nconst tags = (p.hashtags || []).join(' ');\nlet description = [p.description, tags].filter(Boolean).join('\\n\\n');\nif (description.length > 800) description = description.slice(0, 797) + '...';\nreturn [{ json: {\n  product_id: pid,\n  board_id: config.pinterest_board_id,\n  filename: preview.filename,\n  title: String(p.title || '').slice(0, 100),\n  description,\n  alt_text: String(p.title || preview.vision_notes || '').slice(0, 500)\n} }];\n"
+      }
+    },
+    {
+      "id": "3ebcec1a-e177-59e0-921a-861f260eadf8",
+      "name": "Register Media",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        1000,
+        0
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.pinterest.com/v5/media",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "oAuth2Api",
+        "options": {
+          "timeout": 120000
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ JSON.stringify({ media_type: 'video' }) }}"
+      },
+      "credentials": {
+        "oAuth2Api": {
+          "id": "oAuth2Api",
+          "name": "Pinterest account"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "53222d3d-bfb4-56a6-85bc-c9a750b271cf",
+      "name": "S3 Upload",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        1200,
+        0
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "http://tracking-api:8081/pinterest/s3-upload",
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ JSON.stringify({ upload_url: $json.upload_url, upload_parameters: $json.upload_parameters, name: $('Prepare Pin Job').first().json.filename }) }}",
+        "options": {
+          "timeout": 120000
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "77c59197-d473-53fe-9c35-de41357a180b",
+      "name": "Check Media",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        1400,
+        0
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "={{ 'https://api.pinterest.com/v5/media/' + $('Register Media').first().json.media_id }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "oAuth2Api",
+        "options": {
+          "timeout": 120000
+        }
+      },
+      "credentials": {
+        "oAuth2Api": {
+          "id": "oAuth2Api",
+          "name": "Pinterest account"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "000ea995-964c-5744-87fd-9d9c25ab1dd1",
+      "name": "Media Gate",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1600,
+        0
+      ],
+      "parameters": {
+        "jsCode": "const errText = (r) => r && (r.error || (r.code && r.message)) ? String((r.error && (r.error.description || r.error.message)) || r.message || JSON.stringify(r.error)).slice(0, 400) : null;\nconst reg = $('Register Media').first().json;\nconst up = $('S3 Upload').first().json;\nconst media = $json;\nconst attempt = $runIndex;\nconst firstErr = errText(reg) || (reg.media_id ? null : 'Register media returned no media_id: ' + JSON.stringify(reg).slice(0, 300))\n  || (up.ok ? null : 'S3 upload failed: ' + (up.error || up.status))\n  || errText(media);\nif (firstErr) return [{ json: { state: 'fail', error: firstErr } }];\nconst status = String(media.status || '');\nif (status === 'succeeded') return [{ json: { state: 'ready', attempt } }];\nif (status === 'failed') return [{ json: { state: 'fail', error: 'Pinterest video processing failed' } }];\nif (attempt >= 30) return [{ json: { state: 'fail', error: 'Pinterest processing timed out (' + status + ')' } }];\nreturn [{ json: { state: 'wait', attempt, status } }];\n"
+      }
+    },
+    {
+      "id": "270672c1-ffac-520e-86f4-a7cfde76a756",
+      "name": "Media Ready?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        1800,
+        0
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "c73a7c5c-d4c2-5d60-9fb5-85674805482b",
+              "leftValue": "={{ $json.state }}",
+              "rightValue": "ready",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "db8e310e-ca41-523f-b9e5-6b519364bf83",
+      "name": "Keep Waiting?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        1800,
+        220
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "56e8e043-e017-5b18-b50f-e65410fa8fd3",
+              "leftValue": "={{ $json.state }}",
+              "rightValue": "wait",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "7590c775-b09c-5d1f-ba87-2017c3b5741d",
+      "name": "Wait",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        2000,
+        320
+      ],
+      "parameters": {
+        "resume": "timeInterval",
+        "amount": 10,
+        "unit": "seconds"
+      }
+    },
+    {
+      "id": "51f32e2e-102b-582d-9bea-c38430a82f0c",
+      "name": "Create Pin",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        2000,
+        -100
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.pinterest.com/v5/pins",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "oAuth2Api",
+        "options": {
+          "timeout": 120000
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ JSON.stringify({ board_id: $('Prepare Pin Job').first().json.board_id, title: $('Prepare Pin Job').first().json.title, description: $('Prepare Pin Job').first().json.description, alt_text: $('Prepare Pin Job').first().json.alt_text, media_source: { source_type: 'video_id', media_id: $('Register Media').first().json.media_id, cover_image_key_frame_time: 1 } }) }}"
+      },
+      "credentials": {
+        "oAuth2Api": {
+          "id": "oAuth2Api",
+          "name": "Pinterest account"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "4628d536-5029-525d-9371-f12de97477b7",
+      "name": "Pin Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2200,
+        0
+      ],
+      "parameters": {
+        "jsCode": "const errText = (r) => r && (r.error || (r.code && r.message)) ? String((r.error && (r.error.description || r.error.message)) || r.message || JSON.stringify(r.error)).slice(0, 400) : null;\nconst gate = $('Media Gate').last().json;\nlet pin = null;\ntry { pin = $('Create Pin').first().json; } catch (e) {}\nconst base = { product_id: $('Prepare Pin Job').first().json.product_id, platform: 'pinterest' };\nif (gate.state !== 'ready') return [{ json: { ...base, status: 'failed', error_message: gate.error } }];\nif (!pin || errText(pin) || !pin.id) return [{ json: { ...base, status: 'failed', error_message: errText(pin) || ('Create Pin returned no id: ' + JSON.stringify(pin).slice(0, 300)) } }];\nreturn [{ json: { ...base, status: 'published', post_id: pin.id, url: 'https://www.pinterest.com/pin/' + pin.id + '/' } }];\n"
+      }
+    },
+    {
+      "id": "663ede21-1245-5e2f-9b5a-aa6c76ccdc4b",
+      "name": "Record Pinterest",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        2400,
+        0
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "http://tracking-api:8081/products/17/platform-result",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ platform: 'pinterest', status: $json.status, post_id: $json.post_id || null, error_message: $json.error_message || null }) }}",
+        "options": {
+          "timeout": 120000
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "72084d29-8306-569d-b6c9-801e11047d24",
+      "name": "Live Summary",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2600,
+        0
+      ],
+      "parameters": {
+        "jsCode": "const r = $('Pin Result').first().json;\nreturn [{ json: { product_id: r.product_id, pinterest: { status: r.status, post_id: r.post_id || null, url: r.url || null, error: r.error_message || null }, global_dry_run_unchanged: $('Load Config').first().json.dry_run } }];\n"
+      }
+    }
+  ],
+  "connections": {
+    "Run Manually": {
+      "main": [
+        [
+          {
+            "node": "Load Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Config": {
+      "main": [
+        [
+          {
+            "node": "Load Preview",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Preview": {
+      "main": [
+        [
+          {
+            "node": "Load Product",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Product": {
+      "main": [
+        [
+          {
+            "node": "Prepare Pin Job",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Pin Job": {
+      "main": [
+        [
+          {
+            "node": "Register Media",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Register Media": {
+      "main": [
+        [
+          {
+            "node": "S3 Upload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "S3 Upload": {
+      "main": [
+        [
+          {
+            "node": "Check Media",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Media": {
+      "main": [
+        [
+          {
+            "node": "Media Gate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Media Gate": {
+      "main": [
+        [
+          {
+            "node": "Media Ready?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Media Ready?": {
+      "main": [
+        [
+          {
+            "node": "Create Pin",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Keep Waiting?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Keep Waiting?": {
+      "main": [
+        [
+          {
+            "node": "Wait",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Pin Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait": {
+      "main": [
+        [
+          {
+            "node": "Check Media",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Pin": {
+      "main": [
+        [
+          {
+            "node": "Pin Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Pin Result": {
+      "main": [
+        [
+          {
+            "node": "Record Pinterest",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Record Pinterest": {
+      "main": [
+        [
+          {
+            "node": "Live Summary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Asia/Kolkata",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false,
+    "errorWorkflow": "3dprErrorLog008"
+  },
+  "pinData": {},
+  "versionId": "85bcb15b-6d07-56d6-836b-64c118b59c5f",
+  "meta": {
+    "templateCredsSetupCompleted": false
+  },
+  "tags": []
+}

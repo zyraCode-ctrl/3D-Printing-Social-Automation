@@ -134,11 +134,36 @@ def ensure_credentials(client: N8n, env: dict[str, str] | None = None) -> dict[s
             "type": "youTubeOAuth2Api",
             "data": {"clientId": "", "clientSecret": ""},
         },
+        {
+            "name": "Pinterest account",
+            "type": "oAuth2Api",
+            "data": {
+                "grantType": "authorizationCode",
+                "authUrl": "https://www.pinterest.com/oauth/",
+                "accessTokenUrl": "https://api.pinterest.com/v5/oauth/token",
+                "clientId": "",
+                "clientSecret": "",
+                "scope": "user_accounts:read,boards:read,boards:write,pins:read,pins:write",
+                "authQueryParameters": "",
+                "authentication": "header",
+                "ignoreSSLIssues": False,
+            },
+        },
+        {
+            "name": "Groq account",
+            "type": "httpHeaderAuth",
+            "data": {"name": "Authorization", "value": ""},
+        },
     ]
+    groq_key = (env.get("GROQ_API_KEY") or os.environ.get("GROQ_API_KEY") or "").strip()
     mapping: dict[str, dict[str, str]] = {}
     yt_client_id = (env.get("YOUTUBE_OAUTH_CLIENT_ID") or os.environ.get("YOUTUBE_OAUTH_CLIENT_ID") or "").strip()
     yt_client_secret = (
         env.get("YOUTUBE_OAUTH_CLIENT_SECRET") or os.environ.get("YOUTUBE_OAUTH_CLIENT_SECRET") or ""
+    ).strip()
+    pin_client_id = (env.get("PINTEREST_OAUTH_CLIENT_ID") or os.environ.get("PINTEREST_OAUTH_CLIENT_ID") or "").strip()
+    pin_client_secret = (
+        env.get("PINTEREST_OAUTH_CLIENT_SECRET") or os.environ.get("PINTEREST_OAUTH_CLIENT_SECRET") or ""
     ).strip()
     for spec in specs:
         current = existing.get(spec["name"])
@@ -187,6 +212,41 @@ def ensure_credentials(client: N8n, env: dict[str, str] | None = None) -> dict[s
                     if st not in {200, 201}:
                         st, body = client.json("PUT", f"/rest/credentials/{current['id']}", payload)
                     print(f"YouTube OAuth client fields update: {st} (Sign in with Google still required in n8n UI)")
+            if spec["type"] == "oAuth2Api" and spec["name"] == "Pinterest account":
+                st, detail = client.json("GET", f"/rest/credentials/{current['id']}?includeData=true")
+                cred = detail.get("data", detail) if isinstance(detail, dict) else detail
+                data = dict((cred or {}).get("data") or {})
+                defaults = spec["data"]
+                changed = False
+                for key, value in defaults.items():
+                    if key in {"clientId", "clientSecret"}:
+                        continue
+                    if data.get(key) != value:
+                        data[key] = value
+                        changed = True
+                if pin_client_id and data.get("clientId") != pin_client_id:
+                    data["clientId"] = pin_client_id
+                    changed = True
+                if pin_client_secret and data.get("clientSecret") != pin_client_secret:
+                    data["clientSecret"] = pin_client_secret
+                    changed = True
+                if changed:
+                    payload = {"name": spec["name"], "type": "oAuth2Api", "data": data}
+                    st, body = client.json("PATCH", f"/rest/credentials/{current['id']}", payload)
+                    if st not in {200, 201}:
+                        st, body = client.json("PUT", f"/rest/credentials/{current['id']}", payload)
+                    print(f"Pinterest OAuth fields update: {st} (Connect my account still required in n8n UI)")
+            if spec["type"] == "httpHeaderAuth" and groq_key:
+                st, detail = client.json("GET", f"/rest/credentials/{current['id']}?includeData=true")
+                cred = detail.get("data", detail) if isinstance(detail, dict) else detail
+                data = dict((cred or {}).get("data") or {})
+                wanted = {"name": "Authorization", "value": f"Bearer {groq_key}"}
+                if any(data.get(k) != v for k, v in wanted.items()):
+                    payload = {"name": spec["name"], "type": "httpHeaderAuth", "data": wanted}
+                    st, body = client.json("PATCH", f"/rest/credentials/{current['id']}", payload)
+                    if st not in {200, 201}:
+                        st, body = client.json("PUT", f"/rest/credentials/{current['id']}", payload)
+                    print(f"Groq credential update: {st}")
             continue
         create_spec = dict(spec)
         if create_spec["type"] == "googlePalmApi":
@@ -201,6 +261,15 @@ def ensure_credentials(client: N8n, env: dict[str, str] | None = None) -> dict[s
                 "clientId": yt_client_id,
                 "clientSecret": yt_client_secret,
             }
+        if create_spec["type"] == "oAuth2Api" and create_spec["name"] == "Pinterest account":
+            data = dict(create_spec["data"])
+            if pin_client_id:
+                data["clientId"] = pin_client_id
+            if pin_client_secret:
+                data["clientSecret"] = pin_client_secret
+            create_spec["data"] = data
+        if create_spec["type"] == "httpHeaderAuth" and groq_key:
+            create_spec["data"] = {"name": "Authorization", "value": f"Bearer {groq_key}"}
         status, body = client.json("POST", "/rest/credentials", create_spec)
         print(f"Create credential {create_spec['name']}: {status}")
         if status in {200, 201} and isinstance(body, dict):
@@ -301,12 +370,14 @@ def main() -> None:
 
     existing_status, existing = client.json("GET", "/rest/workflows")
     existing_by_name: dict[str, str] = {}
+    existing_by_id: dict[str, str] = {}
     if existing_status == 200:
         items = existing.get("data", existing) if isinstance(existing, dict) else existing
         if isinstance(items, list):
             for item in items:
                 if isinstance(item, dict) and item.get("name") and item.get("id"):
                     existing_by_name[item["name"]] = item["id"]
+                    existing_by_id[str(item["id"])] = item["name"]
 
     order = [
         "08-error-logger.json",
@@ -317,6 +388,12 @@ def main() -> None:
         "07-youtube.json",
         "09-meta-auth-probe.json",
         "10-youtube-auth-probe.json",
+        "11-pinterest-auth-probe.json",
+        "12-groq-auth-probe.json",
+        "13-live-reel-test.json",
+        "14-live-pinterest-video.json",
+        "15-live-facebook-reel.json",
+        "16-queue-preparer.json",
         "01-daily-publisher.json",
         "02-admin-control.json",
     ]
@@ -326,9 +403,9 @@ def main() -> None:
         doc = json.loads(path.read_text(encoding="utf-8"))
         doc = attach_credentials(doc, creds)
         name = doc["name"]
-        desired_id = doc.get("id")
-        if name in existing_by_name:
-            workflow_id = existing_by_name[name]
+        desired_id = str(doc.get("id") or "")
+        workflow_id = existing_by_name.get(name) or (desired_id if desired_id in existing_by_id else None)
+        if workflow_id:
             st, full = client.json("GET", f"/rest/workflows/{workflow_id}")
             current = full.get("data", full) if isinstance(full, dict) else full
             if not isinstance(current, dict):

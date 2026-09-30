@@ -1,33 +1,69 @@
 name: Daily social dry-run
 
-# Free GitHub-hosted runner. Keeps DRY_RUN=true — never publishes to social networks.
-# Schedule: 09:00 Asia/Kolkata = 03:30 UTC
+# Free GitHub-hosted runner (public repo = no cost). Keeps DRY_RUN=true — never publishes.
+# The daily time is NOT hard-coded here: it lives in config/schedule.json, which the dashboard
+# saves and pushes. GitHub cannot rewrite its own cron with the default token, so this workflow
+# ticks every 15 minutes and the gate job runs the real job once per Asia/Kolkata day at/after
+# the saved time.
 
 on:
   schedule:
-    - cron: "30 3 * * *"
+    - cron: "*/15 * * * *"
   workflow_dispatch:
   push:
     branches: [master, main]
     paths:
       - ".github/workflows/daily-dry-run.yml"
       - "docker-compose.yml"
+      - "db/**"
       - "services/**"
       - "scripts/**"
       - "n8n/workflows/**"
       - "config/**"
+      - "!config/schedule.json"
 
-concurrency:
-  group: daily-dry-run
-  cancel-in-progress: true
+permissions:
+  contents: read
+  actions: read
 
 jobs:
+  gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      due: ${{ steps.gate.outputs.due }}
+      marker_key: ${{ steps.gate.outputs.marker_key }}
+    steps:
+      - name: Checkout schedule
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            config/schedule.json
+            scripts/schedule_gate.py
+          sparse-checkout-cone-mode: false
+
+      - name: Decide if the daily run is due
+        id: gate
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python3 scripts/schedule_gate.py
+
   dry-run:
+    needs: gate
+    if: needs.gate.outputs.due == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    concurrency:
+      group: daily-dry-run
+      cancel-in-progress: false
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Unit tests (schedule, queue, duplicate prevention, GitHub sync)
+        run: |
+          python3 scripts/test_schedule_queue.py
+          python3 scripts/validate_workflows.py
 
       - name: Restore tracking DB cache
         uses: actions/cache@v4
@@ -46,6 +82,7 @@ jobs:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           YOUTUBE_OAUTH_CLIENT_ID: ${{ secrets.YOUTUBE_OAUTH_CLIENT_ID }}
           YOUTUBE_OAUTH_CLIENT_SECRET: ${{ secrets.YOUTUBE_OAUTH_CLIENT_SECRET }}
+          PINTEREST_BOARD_ID: ${{ secrets.PINTEREST_BOARD_ID }}
         run: |
           set -euo pipefail
           if [ -z "${N8N_ENCRYPTION_KEY}" ]; then
@@ -58,6 +95,8 @@ jobs:
           fi
           EMAIL="${N8N_OWNER_EMAIL:-admin@localhost.local}"
           FOLDER="${GOOGLE_DRIVE_FOLDER_ID:-1MU6xHdcI18mCbDsp1IxAyA9YoDfeRQKD}"
+          # Prefer GitHub secret; fall back to the Anikaza "configured" board id for dry-run CI.
+          PIN_BOARD="${PINTEREST_BOARD_ID:-1074601229777946521}"
           cat > .env <<EOF
           N8N_HOST=localhost
           N8N_PORT=5678
@@ -76,18 +115,21 @@ jobs:
           N8N_OWNER_PASSWORD=${N8N_OWNER_PASSWORD}
           DRY_RUN=true
           USE_SAMPLE_MEDIA=false
-          DAILY_CRON=0 9 * * *
+          SCHEDULER_ENABLED=false
           GOOGLE_DRIVE_FOLDER_ID=${FOLDER}
           DRIVE_ACCESS_MODE=public
           META_GRAPH_VERSION=v22.0
           YOUTUBE_PRIVACY_STATUS=private
           YOUTUBE_OAUTH_CLIENT_ID=${YOUTUBE_OAUTH_CLIENT_ID}
           YOUTUBE_OAUTH_CLIENT_SECRET=${YOUTUBE_OAUTH_CLIENT_SECRET}
+          PINTEREST_BOARD_ID=${PIN_BOARD}
           INCLUDE_WEBSITE_URL=false
           AI_PROVIDER=gemini
           GEMINI_MODEL=gemini-3.6-flash
           GEMINI_HOST=https://generativelanguage.googleapis.com
           GEMINI_API_KEY=${GEMINI_API_KEY}
+          AI_FALLBACK_PROVIDER=groq
+          GROQ_MODEL=qwen/qwen3.8-27b
           TRACKING_API_PORT=8081
           EOF
           # Strip leading spaces from heredoc indentation
@@ -117,6 +159,7 @@ jobs:
       - name: Import n8n workflows + credentials
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           YOUTUBE_OAUTH_CLIENT_ID: ${{ secrets.YOUTUBE_OAUTH_CLIENT_ID }}
           YOUTUBE_OAUTH_CLIENT_SECRET: ${{ secrets.YOUTUBE_OAUTH_CLIENT_SECRET }}
         run: python3 scripts/import_workflows.py
@@ -132,6 +175,24 @@ jobs:
           python3 scripts/ci_daily_run.py
           python3 scripts/test_dry_run.py
           python3 scripts/test_youtube_readiness.py
+
+      - name: Verify dashboard + schedule endpoints
+        run: |
+          set -euo pipefail
+          curl -fsS http://127.0.0.1:8081/dashboard | grep -q "Schedule settings"
+          curl -fsS http://127.0.0.1:8081/schedule | python3 -c "import json,sys; s=json.load(sys.stdin); want=json.load(open('config/schedule.json'))['publish_time']; assert s['publish_time']==want, s; print('schedule', s['publish_time'], s['timezone'], 'next', s['next_run']['at'])"
+          curl -fsS http://127.0.0.1:8081/queue | python3 -c "import json,sys; q=json.load(sys.stdin); print('queue', [r['product_id'] for r in q['active']], 'size', q['queue_size'])"
+
+      - name: Mark today's scheduled run as done
+        if: success() && github.event_name == 'schedule'
+        run: mkdir -p .daily-marker && date -u > .daily-marker/ran-at.txt
+
+      - name: Save daily marker
+        if: success() && github.event_name == 'schedule'
+        uses: actions/cache/save@v4
+        with:
+          path: .daily-marker
+          key: ${{ needs.gate.outputs.marker_key }}
 
       - name: Dump logs on failure
         if: failure()

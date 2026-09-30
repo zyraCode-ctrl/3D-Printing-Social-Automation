@@ -21,7 +21,10 @@ services:
       TRACKING_API_PORT: 8081
       DRY_RUN: ${DRY_RUN:-true}
       USE_SAMPLE_MEDIA: ${USE_SAMPLE_MEDIA:-false}
-      DAILY_CRON: ${DAILY_CRON:-0 9 * * *}
+      SCHEDULER_ENABLED: ${SCHEDULER_ENABLED:-true}
+      GITHUB_SYNC_TOKEN: ${GITHUB_SYNC_TOKEN:-}
+      GITHUB_REPOSITORY: ${GITHUB_REPOSITORY:-}
+      GITHUB_BRANCH: ${GITHUB_BRANCH:-main}
       GENERIC_TIMEZONE: ${GENERIC_TIMEZONE:-Asia/Kolkata}
       TZ: ${TZ:-Asia/Kolkata}
       GOOGLE_DRIVE_FOLDER_ID: ${GOOGLE_DRIVE_FOLDER_ID:-}
@@ -36,14 +39,20 @@ services:
       AI_PROVIDER: ${AI_PROVIDER:-gemini}
       GEMINI_MODEL: ${GEMINI_MODEL:-gemini-3.6-flash}
       GEMINI_HOST: ${GEMINI_HOST:-https://generativelanguage.googleapis.com}
+      AI_FALLBACK_PROVIDER: ${AI_FALLBACK_PROVIDER:-groq}
+      GROQ_MODEL: ${GROQ_MODEL:-qwen/qwen3.8-27b}
       OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434}
       OLLAMA_MODEL: ${OLLAMA_MODEL:-llava}
       WEBHOOK_URL: ${WEBHOOK_URL:-http://localhost:5678/}
+      N8N_INTERNAL_URL: http://n8n:5678
+      N8N_OWNER_EMAIL: ${N8N_OWNER_EMAIL:-admin@localhost.local}
+      N8N_OWNER_PASSWORD: ${N8N_OWNER_PASSWORD:-}
     ports:
-      - "${TRACKING_API_PORT:-8081}:8081"
+      - "127.0.0.1:${TRACKING_API_PORT:-8081}:8081"
     volumes:
       - ./data:/data
-      - ./config:/data/config:ro
+      # read-write so the dashboard can save config/schedule.json (the schedule source of truth)
+      - ./config:/data/config
       - ./samples:/data/samples:ro
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8081/health')"]
@@ -81,7 +90,6 @@ services:
       NODE_OPTIONS: --max-old-space-size=2048
       DRY_RUN: ${DRY_RUN:-true}
       USE_SAMPLE_MEDIA: ${USE_SAMPLE_MEDIA:-false}
-      DAILY_CRON: ${DAILY_CRON:-0 9 * * *}
       GOOGLE_DRIVE_FOLDER_ID: ${GOOGLE_DRIVE_FOLDER_ID:-}
       DRIVE_ACCESS_MODE: ${DRIVE_ACCESS_MODE:-public}
       FACEBOOK_PAGE_ID: ${FACEBOOK_PAGE_ID:-}
@@ -94,6 +102,8 @@ services:
       AI_PROVIDER: ${AI_PROVIDER:-gemini}
       GEMINI_MODEL: ${GEMINI_MODEL:-gemini-3.6-flash}
       GEMINI_HOST: ${GEMINI_HOST:-https://generativelanguage.googleapis.com}
+      AI_FALLBACK_PROVIDER: ${AI_FALLBACK_PROVIDER:-groq}
+      GROQ_MODEL: ${GROQ_MODEL:-qwen/qwen3.8-27b}
       OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434}
       OLLAMA_MODEL: ${OLLAMA_MODEL:-llava}
       TRACKING_API_URL: http://tracking-api:8081

@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
-"""Run the full Daily Publisher DRY_RUN path and verify Finalize Dry Run succeeds."""
+"""Run the Daily Publisher DRY_RUN path: claim the queue head, finalize it, and verify the queue advances."""
 
 from __future__ import annotations
 
 import json
 import sys
 import time
+import urllib.request
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -13,15 +14,19 @@ sys.path.insert(0, str(ROOT / "scripts"))
 from import_workflows import N8n, load_env  # noqa: E402
 
 DAILY_WF = "3dprDailyPub0001"
+TRACKING = "http://127.0.0.1:8081"
 REQUIRED_NODES = [
-    "List Google Drive Folder",
-    "Select Next Product",
-    "Download Drive Media",
-    "Prepare Vision Still",
-    "Generate AI Content",
-    "Save Preview",
+    "Load Config",
+    "Build Publish Job",
+    "Mark Processing",
+    "Publish Payload",
     "Finalize Dry Run",
 ]
+
+
+def queue() -> dict:
+    with urllib.request.urlopen(f"{TRACKING}/queue", timeout=20) as resp:
+        return json.loads(resp.read().decode("utf-8"))
 
 
 def resolve_flat(arr, x, depth=0):
@@ -74,15 +79,20 @@ def main() -> None:
     if st not in {200, 201}:
         raise SystemExit(f"login failed: {st}")
 
-    # Confirm live Finalize Dry Run URL uses Pick Vision File
     st, wf = client.json("GET", f"/rest/workflows/{DAILY_WF}")
     doc = wf.get("data", wf) if isinstance(wf, dict) else wf
     nodes = {n["name"]: n for n in doc.get("nodes", [])}
     finalize = nodes.get("Finalize Dry Run", {})
     url = (finalize.get("parameters") or {}).get("url", "")
     print("live_finalize_url", url)
-    if "Pick Vision File" not in str(url):
-        raise SystemExit("live Finalize Dry Run still uses stale product_id expression")
+    if "Build Publish Job" not in str(url):
+        raise SystemExit("live Finalize Dry Run does not use the claimed queue product")
+    if any(n.get("type", "").endswith("scheduleTrigger") for n in nodes.values()):
+        raise SystemExit("Daily Publisher still has its own cron; the tracking-api scheduler must own the time")
+
+    before = queue()
+    head_before = (before.get("head") or {}).get("product_id")
+    print("queue_before", [r["product_id"] for r in before.get("active") or []], "head", head_before)
 
     st, run = client.json(
         "POST",
@@ -103,7 +113,7 @@ def main() -> None:
         arr = json.loads(d["data"]) if isinstance(d.get("data"), str) else d.get("data")
         root = resolve_flat(arr, arr[0])
         run_data = (root.get("resultData") or {}).get("runData") or {}
-        for name in REQUIRED_NODES + ["Pick Vision File", "Build Preview Payload", "Log Dry Run Preview"]:
+        for name in REQUIRED_NODES + ["Claim Queue Head", "Prepare Content Now", "Claim After Prepare", "Log Dry Run Preview"]:
             result["nodes"][name] = node_summary(run_data, name)
         finalize = result["nodes"].get("Finalize Dry Run") or {}
         result["ok"] = status == "success" and bool(finalize.get("ok"))
@@ -125,6 +135,16 @@ def main() -> None:
     print(json.dumps(result, indent=2))
     if not result.get("ok"):
         raise SystemExit(1)
+
+    published = (result["nodes"].get("Build Publish Job") or {}).get("product_id")
+    after = queue()
+    active_after = [r["product_id"] for r in after.get("active") or []]
+    print("published_product", published, "queue_after", active_after)
+    if published in active_after:
+        raise SystemExit(f"queue did not advance: product {published} is still active")
+    if head_before is not None and published != head_before:
+        raise SystemExit(f"published product {published} was not the queue head {head_before}")
+    print("Queue advanced past product", published)
 
 
 if __name__ == "__main__":

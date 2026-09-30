@@ -4,8 +4,15 @@
   "04 Instagram Publisher": "3dprInstagram004",
   "05 Facebook Publisher": "3dprFacebook005",
   "06 Pinterest Publisher": "3dprPinterest06",
-  "07 YouTube Publisher": "3dprYouTube0007",
+  "07 YouTube Shorts Publisher": "3dprYouTube0007",
   "09 Meta Auth Probe": "3dprMetaAuthProbe09",
+  "10 YouTube Shorts Auth Probe": "3dprYtAuthProbe10",
+  "11 Pinterest Auth Probe": "3dprPinAuthProbe11",
+  "12 Groq Auth Probe": "3dprGroqAuthProbe12",
+  "13 Live Reel Test": "3dprLiveReel00013",
+  "14 Live Pinterest Video Pin": "3dprLivePinVid014",
+  "15 Live Facebook Reel Test": "3dprLiveFbReel015",
+  "16 Content Queue Preparer": "3dprQueuePrep016",
   "01 Daily Publisher": "3dprDailyPub0001",
   "02 Admin Control": "3dprAdminCtl0002"
 }

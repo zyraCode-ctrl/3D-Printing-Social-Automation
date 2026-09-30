@@ -10,7 +10,7 @@ This project does **not** use Zapier, Make, Buffer, upload-post.com, or a custom
 | --- | --- |
 | n8n at http://localhost:5678 | Schedule, Google Drive, AI calls, official social APIs |
 | Tracking API at http://localhost:8081 | SQLite product tracker, duplicate protection, logs, previews |
-| Status page at http://localhost:8081/admin | Posting status without logging into n8n |
+| Dashboard at http://localhost:8081/dashboard | System status, DRY_RUN indicator, schedule time picker, 3-product queue, per-platform results, runs and activity ([docs/DASHBOARD.md](docs/DASHBOARD.md)) |
 
 Default safety: **`DRY_RUN=true`**. Nothing is published to Instagram, Facebook, Pinterest, or YouTube until you explicitly set `DRY_RUN=false`.
 
@@ -21,8 +21,8 @@ Exact order: [docs/INTEGRATION_PRIORITY.md](docs/INTEGRATION_PRIORITY.md)
 1. Google Drive — done  
 2. Gemini — done  
 3. Content generation — done  
-4. **YouTube Shorts API/OAuth — do now** → [docs/YOUTUBE_SHORTS_SETUP.md](docs/YOUTUBE_SHORTS_SETUP.md)  
-5. Pinterest — after YouTube  
+4. YouTube Shorts API/OAuth — done → [docs/YOUTUBE_SHORTS_SETUP.md](docs/YOUTUBE_SHORTS_SETUP.md)  
+5. **Pinterest API/OAuth — do now** → [docs/PINTEREST_SETUP.md](docs/PINTEREST_SETUP.md)  
 6. Instagram Meta — after Meta access  
 7. Facebook Meta — after Instagram  
 8. Final full-system DRY_RUN  
@@ -30,19 +30,25 @@ Exact order: [docs/INTEGRATION_PRIORITY.md](docs/INTEGRATION_PRIORITY.md)
 
 ## Free daily runs (GitHub Actions)
 
-See [docs/GITHUB_ACTIONS_DEPLOY.md](docs/GITHUB_ACTIONS_DEPLOY.md). The repo can run once per day on free GitHub-hosted runners (boot stack → dry-run verify → shut down). Social publishing stays blocked.
+See [docs/GITHUB_ACTIONS_DEPLOY.md](docs/GITHUB_ACTIONS_DEPLOY.md). The repo runs once per day on free GitHub-hosted runners at the time chosen in the dashboard (boot stack → dry-run verify → shut down). Social publishing stays blocked there.
 
 ## Daily behaviour
 
-Every day at **9:00 AM Asia/Kolkata** (change the Schedule node or `DAILY_CRON`):
+The publishing time is chosen on the dashboard (**Schedule settings**) and stored in `config/schedule.json`, the single source of truth (timezone **Asia/Kolkata**). There is no hard-coded time.
+
+Continuously, **16 Content Queue Preparer** keeps the next **3** products ready in advance:
 
 1. List files in the configured Google Drive folder.
 2. Parse numeric Product IDs (`1.jpg`, `4.mp4`, …). `4.jpg` and `4.mp4` are the same product.
-3. Pick the **lowest Product ID that is not fully completed**.
+3. Pick the **lowest Product ID that is not fully completed and not already queued**.
 4. Download the actual media and run **real vision AI**. No invented specs. No website URL.
-5. Save a preview.
-6. If `DRY_RUN=true`, stop. If `DRY_RUN=false`, publish only platforms that have not already succeeded.
-7. Mark the Product ID completed only when every **required** platform succeeded.
+5. Save the preview and add the product to the rolling queue.
+
+Once per day at the selected time, **01 Daily Publisher**:
+
+1. Takes the **queue head** (one product per day).
+2. If `DRY_RUN=true`, logs the preview and stops. If `DRY_RUN=false`, publishes only platforms that have not already succeeded.
+3. Marks the Product ID completed only when every **required** platform succeeded, then the queue advances and the preparer refills it.
 
 Required platforms:
 
@@ -68,11 +74,11 @@ python scripts/test_dry_run.py
 Then open:
 
 - n8n editor: http://localhost:5678
-- Status page: http://localhost:8081/admin
+- Dashboard: http://localhost:8081/dashboard
 
 Sign in at http://localhost:5678 using `N8N_OWNER_EMAIL` and `N8N_OWNER_PASSWORD` from `.env`.
 
-Then click **01 Daily Publisher** → **Execute workflow** (play button) for a one-off dry run. Click **Publish** on that workflow only when you want the 9:00 AM schedule. Admin webhooks need **02 Admin Control** published.
+The tracking-api scheduler starts 01 Daily Publisher at the dashboard time; you can also click **01 Daily Publisher** → **Execute workflow** for a one-off dry run. Admin webhooks need **02 Admin Control** published.
 
 ## First real dry run (Drive + vision AI, no social posting)
 
@@ -83,7 +89,7 @@ Keep `DRY_RUN=true`.
 3. Open http://localhost:5678 and sign in with values from `.env`.
 4. Open **01 Daily Publisher**.
 5. Click **Execute workflow**. This lists the public Drive folder, downloads Product `1` (`001.mp4`), runs Gemini vision, saves a preview, and **does not post**.
-6. Open http://localhost:8081/admin and `data/previews/1.json` to read the generated copy.
+6. Open http://localhost:8081/dashboard and `data/previews/1.json` to read the generated copy.
 
 Do **not** set `DRY_RUN=false`.
 
@@ -108,6 +114,8 @@ Supported files: `jpg`, `jpeg`, `png`, `webp`, `mp4`, `mov` named like `1.jpg` o
 
 The production workflow uses **Google Gemini vision** through the n8n **Google Gemini account** credential (`googlePalmApi`). There is no mock fallback and **no OpenAI API**. ChatGPT Pro is not used.
 
+If every Gemini model fails, the same prompt and schema go to **Groq** in one call (n8n credential **Groq account**). Setup and `GROQ_API_KEY`: [docs/GROQ_FALLBACK_SETUP.md](docs/GROQ_FALLBACK_SETUP.md).
+
 Model: `gemini-3.6-flash` (vision-capable, Google AI Studio free tier). One product per day stays within the free quota. Do not enable paid billing.
 
 ### Create the Gemini API key
@@ -126,11 +134,11 @@ Stop there until the key is saved. Then continue with Google Drive if that crede
 
 ## Connect social accounts (do not publish yet)
 
-Follow [docs/INTEGRATION_PRIORITY.md](docs/INTEGRATION_PRIORITY.md). **Current work: YouTube Shorts OAuth only.**
+Follow [docs/INTEGRATION_PRIORITY.md](docs/INTEGRATION_PRIORITY.md). **Current work: Pinterest API OAuth only.**
 
 Keep `DRY_RUN=true`. Live posting needs your later explicit approval (priority step 9).
 
-### YouTube Shorts (YouTube Data API v3) — do now
+### YouTube Shorts (YouTube Data API v3) — done
 
 In this project, **YouTube means YouTube Shorts only** — never long-form videos.
 
@@ -144,16 +152,18 @@ Setup guide: [docs/YOUTUBE_SHORTS_SETUP.md](docs/YOUTUBE_SHORTS_SETUP.md)
 
 Drive video products are treated as Shorts. Image-only products skip YouTube.
 
-### Pinterest (API v5) — after YouTube
+### Pinterest (API v5) — do now
 
-Image Pins only. Videos are skipped on purpose. Configure only after YouTube Shorts OAuth is done.
+Image Pins only. Videos are skipped on purpose.
 
-1. Open [Pinterest Developers](https://developers.pinterest.com/).
-2. Create an app.
-3. Add redirect `http://localhost:5678/rest/oauth2-credential/callback`.
-4. Request scopes that include pin create / board read (typically `pins:write`, `boards:read`, `boards:write`).
-5. In n8n, add a generic **OAuth2 API** credential for Pinterest and attach it to **06 Pinterest Publisher**.
-6. Set `PINTEREST_BOARD_ID` in `.env`.
+Full click-by-click setup: [docs/PINTEREST_SETUP.md](docs/PINTEREST_SETUP.md)
+
+1. Open [Pinterest Developers → My apps](https://developers.pinterest.com/apps/) with a **business** account and **Connect app** (trial access).
+2. Add redirect `http://localhost:5678/rest/oauth2-credential/callback`.
+3. In n8n, open **Pinterest account** (OAuth2 API), paste App ID/Secret, and connect.
+4. Run **11 Pinterest Auth Probe** (lists account + boards; does not create Pins).
+5. Set `PINTEREST_BOARD_ID` in `.env` from a board id returned by the probe.
+6. Keep `DRY_RUN=true` until you explicitly approve publishing.
 
 ### Instagram + Facebook Page (Meta Graph API) — after Meta access
 
@@ -206,6 +216,7 @@ Keep `.env`’s `N8N_ENCRYPTION_KEY` forever. Credentials in the `n8n_data` Dock
 docker-compose.yml
 .env.example
 config/settings.json
+config/schedule.json      # daily publishing time (edited from the dashboard)
 config/prompts/
 db/schema.sql
 n8n/workflows/

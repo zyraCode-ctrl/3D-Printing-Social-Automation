@@ -42,6 +42,28 @@ CREATE TABLE IF NOT EXISTS content_previews (
   content_json TEXT NOT NULL
 );
 
+-- Rolling content queue: products whose AI content is prepared ahead of the daily slot.
+-- status: prepared -> publishing -> done (back to prepared when a publish attempt fails).
+CREATE TABLE IF NOT EXISTS content_queue (
+  product_id INTEGER PRIMARY KEY,
+  status TEXT NOT NULL CHECK (status IN ('prepared', 'publishing', 'done')),
+  prepared_at TEXT NOT NULL,
+  claimed_at TEXT,
+  completed_at TEXT,
+  run_date TEXT,
+  claim_count INTEGER NOT NULL DEFAULT 0,
+  last_error TEXT,
+  reused_preview INTEGER NOT NULL DEFAULT 0
+);
+
+-- Small key/value store for scheduler and sync state (survives container rebuilds via data/db).
+CREATE TABLE IF NOT EXISTS app_state (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_products_overall ON products(overall_status);
+CREATE INDEX IF NOT EXISTS idx_queue_status ON content_queue(status, product_id);
 CREATE INDEX IF NOT EXISTS idx_logs_product ON logs(product_id, ts);
 CREATE INDEX IF NOT EXISTS idx_previews_product ON content_previews(product_id, created_at);

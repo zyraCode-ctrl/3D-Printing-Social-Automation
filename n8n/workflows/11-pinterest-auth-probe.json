@@ -1,0 +1,237 @@
+{
+  "id": "3dprPinAuthProbe11",
+  "name": "11 Pinterest Auth Probe",
+  "active": false,
+  "isArchived": false,
+  "nodes": [
+    {
+      "id": "50f9d00c-4f69-5d09-a03a-a5a761fd6db0",
+      "name": "Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -400,
+        -240
+      ],
+      "parameters": {
+        "content": "## Pinterest Auth Probe\n\nManual test only. Does **not** create Pins or change boards.\n\nUses Pinterest API v5 `user_account` + `boards` (read-only) with **Pinterest account** OAuth2.\n\n1. Complete Pinterest developer app + n8n **Connect my account** first.\n2. Run this workflow manually.\n3. Confirm username and at least one board id are returned.\n4. Copy a board id into `PINTEREST_BOARD_ID` (later step).\n5. Keep `DRY_RUN=true` \u2014 publisher Pin create stays blocked.\n",
+        "width": 420,
+        "height": 360,
+        "color": 4
+      }
+    },
+    {
+      "id": "5e49d212-622e-5547-b499-82f74b1aac6e",
+      "name": "Run Manually",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {}
+    },
+    {
+      "id": "85f8e319-d824-515e-990e-231c32d1814d",
+      "name": "Load Config",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        240,
+        0
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "http://tracking-api:8081/config",
+        "options": {
+          "timeout": 60000
+        }
+      }
+    },
+    {
+      "id": "e9d388c7-8bd4-545a-91ea-8ea60546a748",
+      "name": "Pinterest Readiness",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        480,
+        0
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "http://tracking-api:8081/pinterest/readiness",
+        "options": {
+          "timeout": 60000
+        }
+      }
+    },
+    {
+      "id": "5f7359f9-08c5-5999-bee5-4de36f6a6edf",
+      "name": "Guard Dry Run",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        720,
+        0
+      ],
+      "parameters": {
+        "jsCode": "const config = $('Load Config').first().json;\nconst readiness = $json;\nif (config.dry_run !== true) {\n  throw new Error('Refusing Pinterest probe while DRY_RUN is not true.');\n}\nreturn [{ json: {\n  dry_run: true,\n  readiness,\n  board_id_configured: Boolean(String(config.pinterest_board_id || '').trim()),\n  note: 'About to call user_account + boards \u2014 read only, no Pin create.'\n} }];\n"
+      }
+    },
+    {
+      "id": "385fbe14-2cb6-5d1f-a301-0fb62b5b464c",
+      "name": "Get User Account",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        980,
+        -80
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "https://api.pinterest.com/v5/user_account",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "oAuth2Api",
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "credentials": {
+        "oAuth2Api": {
+          "id": "oAuth2Api",
+          "name": "Pinterest account"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "91f2d95c-b5c5-5e2d-9247-629e0d6b3c1d",
+      "name": "List Boards",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        980,
+        120
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "https://api.pinterest.com/v5/boards",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "page_size",
+              "value": "25"
+            }
+          ]
+        },
+        "authentication": "genericCredentialType",
+        "genericAuthType": "oAuth2Api",
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "credentials": {
+        "oAuth2Api": {
+          "id": "oAuth2Api",
+          "name": "Pinterest account"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "455c7025-078d-5d83-bb37-df740c82e886",
+      "name": "Summarize Probe",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1240,
+        0
+      ],
+      "parameters": {
+        "jsCode": "const readiness = $('Pinterest Readiness').first().json;\nconst account = $('Get User Account').first().json;\nconst boardsRaw = $('List Boards').first().json;\nconst accountErr = account.error || account.message || null;\nconst boardsErr = boardsRaw.error || boardsRaw.message || null;\nconst items = Array.isArray(boardsRaw.items) ? boardsRaw.items : [];\nconst boards = items.map((b) => ({\n  id: b.id,\n  name: b.name || null,\n  privacy: b.privacy || null,\n}));\nconst username = account.username || account.business_name || null;\nconst oauthOk = !accountErr && !boardsErr && Boolean(username);\nreturn [{ json: {\n  dry_run: true,\n  publish_blocked_by_dry_run: true,\n  pin_create_attempted: false,\n  oauth_ok: oauthOk,\n  username,\n  account_type: account.account_type || null,\n  boards_found: boards,\n  boards_count: boards.length,\n  error: (accountErr || boardsErr)\n    ? (typeof (accountErr || boardsErr) === 'string'\n        ? (accountErr || boardsErr)\n        : ((accountErr || boardsErr).message || JSON.stringify(accountErr || boardsErr).slice(0, 400)))\n    : null,\n  readiness,\n  next: oauthOk\n    ? 'OAuth works. Set PINTEREST_BOARD_ID from boards_found[].id. Keep DRY_RUN=true.'\n    : 'OAuth not connected yet. Finish Pinterest app + n8n Connect my account.',\n} }];\n"
+      }
+    }
+  ],
+  "connections": {
+    "Run Manually": {
+      "main": [
+        [
+          {
+            "node": "Load Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Config": {
+      "main": [
+        [
+          {
+            "node": "Pinterest Readiness",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Pinterest Readiness": {
+      "main": [
+        [
+          {
+            "node": "Guard Dry Run",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Guard Dry Run": {
+      "main": [
+        [
+          {
+            "node": "Get User Account",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get User Account": {
+      "main": [
+        [
+          {
+            "node": "List Boards",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "List Boards": {
+      "main": [
+        [
+          {
+            "node": "Summarize Probe",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Asia/Kolkata",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false,
+    "errorWorkflow": "3dprErrorLog008"
+  },
+  "pinData": {},
+  "versionId": "47e7f234-07ee-5027-b9c1-1724345da6ab",
+  "meta": {
+    "templateCredsSetupCompleted": false
+  },
+  "tags": []
+}

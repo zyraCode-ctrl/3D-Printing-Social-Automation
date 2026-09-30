@@ -14,7 +14,7 @@
         -200
       ],
       "parameters": {
-        "content": "## Pinterest (official API v5)\n\nCreates **image Pins** only, using `media_source.source_type = image_url` or `image_base64`.\n\nVideo products are skipped on purpose. Do not assume video Pin upload works without the media-upload dance.\n\nSet `PINTEREST_BOARD_ID` and attach a Pinterest OAuth2 credential (generic OAuth2) to the HTTP node.\n",
+        "content": "## Pinterest (official API v5)\n\nCreates **image Pins** only, using `media_source.source_type = image_url` or `image_base64`.\n\nVideo products are skipped on purpose. Do not assume video Pin upload works without the media-upload dance.\n\nSet `PINTEREST_BOARD_ID` and attach **Pinterest account** (OAuth2 API) to the HTTP node.\nKeep `DRY_RUN=true` \u2014 Duplicate Check blocks Pin create.\n",
         "width": 320,
         "height": 300,
         "color": 4
@@ -118,7 +118,13 @@
         "authentication": "genericCredentialType",
         "genericAuthType": "oAuth2Api"
       },
-      "onError": "continueRegularOutput"
+      "onError": "continueRegularOutput",
+      "credentials": {
+        "oAuth2Api": {
+          "id": "oAuth2Api",
+          "name": "Pinterest account"
+        }
+      }
     },
     {
       "id": "bd0fcbfe-9ca6-5b1d-8952-3668d9f547bb",

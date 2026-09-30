@@ -14,7 +14,7 @@
         -220
       ],
       "parameters": {
-        "content": "## Meta Auth Probe (Instagram + Facebook)\n\nManual test only. Does **not** publish.\n\nAfter you paste a Page access token into **Facebook Graph account**:\n1. Set `FACEBOOK_PAGE_ID` in `.env` and restart tracking-api / re-import if needed.\n2. Run this workflow manually.\n3. Confirm `me/accounts` lists your Page and Instagram business account id.\n\nKeep `DRY_RUN=true`. Pinterest/YouTube are out of scope for this phase.\n",
+        "content": "## Meta Auth Probe (Instagram + Facebook)\n\nManual test only. Does **not** publish.\n\nAfter you paste a Page access token into **Facebook Graph account**:\n1. Set `FACEBOOK_PAGE_ID` in `.env` and restart tracking-api / re-import if needed.\n2. Run this workflow manually.\n3. Confirm `me` (the Page) returns your Page id and Instagram business account id.\n\nKeep `DRY_RUN=true`. Pinterest/YouTube are out of scope for this phase.\n",
         "width": 380,
         "height": 320,
         "color": 5
@@ -75,12 +75,12 @@
         0
       ],
       "parameters": {
-        "jsCode": "const config = $('Load Config').first().json;\nconst readiness = $json;\nconst version = config.meta_graph_version || 'v22.0';\nconst pageId = config.facebook_page_id || '';\nreturn [{ json: {\n  readiness,\n  dry_run: config.dry_run,\n  page_id: pageId,\n  ig_user_id: config.instagram_business_account_id || '',\n  accounts_url: 'https://graph.facebook.com/' + version + '/me/accounts?fields=id,name,access_token,instagram_business_account',\n  page_url: pageId\n    ? ('https://graph.facebook.com/' + version + '/' + pageId + '?fields=id,name,instagram_business_account')\n    : '',\n} }];\n"
+        "jsCode": "const config = $('Load Config').first().json;\nconst readiness = $json;\nconst version = config.meta_graph_version || 'v22.0';\nconst pageId = config.facebook_page_id || '';\nreturn [{ json: {\n  readiness,\n  dry_run: config.dry_run,\n  page_id: pageId,\n  ig_user_id: config.instagram_business_account_id || '',\n  me_url: 'https://graph.facebook.com/' + version + '/me?metadata=1&fields=id,name',\n  accounts_url: 'https://graph.facebook.com/' + version + '/me/accounts?fields=id,name,instagram_business_account',\n  page_url: 'https://graph.facebook.com/' + version + '/' + (pageId || 'me') + '?fields=id,name,username,link,instagram_business_account{id,username},access_token',\n  graph_base: 'https://graph.facebook.com/' + version,\n} }];\n"
       }
     },
     {
-      "id": "00b6e9c5-b216-5317-8989-31217166c1cb",
-      "name": "Probe me/accounts",
+      "id": "52f8730c-de4c-571a-920c-b73144178a0d",
+      "name": "Probe Token",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.5,
       "position": [
@@ -89,7 +89,7 @@
       ],
       "parameters": {
         "method": "GET",
-        "url": "={{ $json.accounts_url }}",
+        "url": "={{ $('Build Probe URLs').first().json.me_url }}",
         "authentication": "predefinedCredentialType",
         "nodeCredentialType": "facebookGraphApi",
         "options": {
@@ -105,16 +105,122 @@
       "onError": "continueRegularOutput"
     },
     {
+      "id": "7e06d631-f73f-5bdf-a5ad-a2f183db04b4",
+      "name": "Probe Accounts",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        1100,
+        -80
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $('Build Probe URLs').first().json.accounts_url }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "facebookGraphApi",
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "credentials": {
+        "facebookGraphApi": {
+          "id": "facebookGraphApi",
+          "name": "Facebook Graph account"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "41f27cc5-1732-5310-9850-844445c0392a",
+      "name": "Probe Page",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        1220,
+        -80
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $('Build Probe URLs').first().json.page_url }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "facebookGraphApi",
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "credentials": {
+        "facebookGraphApi": {
+          "id": "facebookGraphApi",
+          "name": "Facebook Graph account"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "7c0c75b1-9dd8-506f-aed4-20af32aa0188",
+      "name": "Probe Page Identity",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        1340,
+        -200
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $('Build Probe URLs').first().json.graph_base + '/me?fields=id,name' }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "={{ 'OAuth ' + ($('Probe Page').first().json.access_token || 'missing') }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "e215463d-455c-5a4d-8e20-a843a9cecf06",
+      "name": "Probe Page Reels",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        1400,
+        -80
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $('Build Probe URLs').first().json.graph_base + '/' + $('Build Probe URLs').first().json.page_id + '/video_reels?fields=id,permalink_url,from,created_time&limit=5' }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "={{ 'OAuth ' + ($('Probe Page').first().json.access_token || 'missing') }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
       "id": "836b63a4-5bc7-5dc8-81b4-1cad6b783006",
       "name": "Summarize Probe",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        1240,
+        1460,
         -80
       ],
       "parameters": {
-        "jsCode": "const built = $('Build Probe URLs').first().json;\nconst accounts = $json;\nconst pages = accounts.data || [];\nconst pageMatch = pages.find((p) => String(p.id) === String(built.page_id)) || pages[0] || null;\nconst igFromPage = pageMatch && pageMatch.instagram_business_account\n  ? pageMatch.instagram_business_account.id\n  : null;\nreturn [{ json: {\n  dry_run: built.dry_run,\n  readiness: built.readiness,\n  graph_ok: !accounts.error && Array.isArray(pages),\n  error: accounts.error ? (accounts.error.message || JSON.stringify(accounts.error)) : null,\n  pages_found: pages.map((p) => ({ id: p.id, name: p.name, ig: (p.instagram_business_account || {}).id || null })),\n  configured_page_id: built.page_id || null,\n  configured_ig_user_id: built.ig_user_id || null,\n  discovered_ig_user_id: igFromPage,\n  ids_match: Boolean(built.ig_user_id) && String(built.ig_user_id) === String(igFromPage || ''),\n  note: 'No content was published. Keep DRY_RUN=true until you explicitly approve a live post.'\n} }];\n"
+        "jsCode": "const built = $('Build Probe URLs').first().json;\nconst me = $('Probe Token').first().json;\nconst page = $('Probe Page').first().json;\nconst pageMe = $('Probe Page Identity').first().json;\nconst reels = $('Probe Page Reels').first().json;\nconst errText = (r) => r && r.error ? (r.error.description || r.error.message || JSON.stringify(r.error)) : null;\nconst igFromPage = page && page.instagram_business_account ? page.instagram_business_account.id : null;\nreturn [{ json: {\n  dry_run: built.dry_run,\n  readiness: built.readiness,\n  token_type: (me.metadata || {}).type || null,\n  token_owner: me.id ? { id: me.id, name: me.name } : null,\n  user_pages: ($('Probe Accounts').first().json.data || []).map((p) => ({ id: p.id, name: p.name, ig: (p.instagram_business_account || {}).id || null })),\n  graph_ok: !page.error && Boolean(page.id),\n  error: errText(page) || errText(me),\n  pages_found: page.id ? [{ id: page.id, name: page.name, ig: igFromPage }] : [],\n  page_details: page.id ? {\n    username: page.username || null,\n    link: page.link || null,\n    ig_username: (page.instagram_business_account || {}).username || null,\n    page_token_obtained: Boolean(page.access_token),\n    page_token_identity: pageMe.id ? { id: pageMe.id, name: pageMe.name } : { error: errText(pageMe) },\n    page_token_is_page: String(pageMe.id || '') === String(built.page_id),\n    recent_reels: (reels.data || []).map((r) => ({ id: r.id, permalink_url: r.permalink_url || null, from: r.from || null, created_time: r.created_time || null })),\n    reels_error: errText(reels)\n  } : null,\n  configured_page_id: built.page_id || null,\n  configured_ig_user_id: built.ig_user_id || null,\n  discovered_ig_user_id: igFromPage,\n  ids_match: Boolean(built.ig_user_id) && String(built.ig_user_id) === String(igFromPage || ''),\n  note: 'No content was published. Keep DRY_RUN=true until you explicitly approve a live post.'\n} }];\n"
       }
     }
   ],
@@ -156,14 +262,58 @@
       "main": [
         [
           {
-            "node": "Probe me/accounts",
+            "node": "Probe Token",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Probe me/accounts": {
+    "Probe Token": {
+      "main": [
+        [
+          {
+            "node": "Probe Accounts",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Probe Accounts": {
+      "main": [
+        [
+          {
+            "node": "Probe Page",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Probe Page": {
+      "main": [
+        [
+          {
+            "node": "Probe Page Identity",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Probe Page Identity": {
+      "main": [
+        [
+          {
+            "node": "Probe Page Reels",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Probe Page Reels": {
       "main": [
         [
           {

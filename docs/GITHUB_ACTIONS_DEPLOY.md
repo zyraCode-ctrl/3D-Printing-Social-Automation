@@ -5,8 +5,13 @@ It is **not** a 24/7 VPS — each run boots Docker, verifies the pipeline with `
 
 ## Schedule
 
-- Cron: `30 3 * * *` UTC = **09:00 Asia/Kolkata**
-- Also runs on manual **workflow_dispatch** and on pushes that touch the stack
+The time is **not** in the workflow file. It comes from `config/schedule.json`, which the dashboard edits (see [DASHBOARD.md](DASHBOARD.md)).
+
+- A light **gate** job runs every 15 minutes (`*/15 * * * *`). It reads `config/schedule.json` and starts the full dry-run only once the selected local time (Asia/Kolkata) has passed today.
+- After a successful scheduled run, a `daily-run-marker-<date>` cache entry stops further runs that day.
+- Changing the time on the dashboard pushes `config/schedule.json` to this repo (when `GITHUB_SYNC_TOKEN` is set locally), so the next gate check follows the new time with no code change.
+- GitHub may delay scheduled jobs by a few minutes; the run happens at the first gate check after the selected time.
+- Also runs on manual **workflow_dispatch** and on pushes that touch the stack (those always run)
 
 ## Required GitHub secrets
 
@@ -26,11 +31,13 @@ YouTube **Sign in with Google** (refresh token) cannot be completed headlessly i
 
 ## What each run verifies
 
-1. `tracking-api` + `n8n` healthy  
-2. `DRY_RUN=true` blocks publish  
-3. Workflows imported (including **07 YouTube Shorts Publisher**)  
-4. Public Drive folder list (when folder id present)  
-5. If `GEMINI_API_KEY` is set: attempts one daily dry-run execution  
+1. Offline tests: schedule rules, queue advancement, duplicate prevention, persistence, GitHub sync (`scripts/test_schedule_queue.py`) and workflow validation  
+2. `tracking-api` + `n8n` healthy  
+3. `DRY_RUN=true` blocks publish  
+4. Dashboard, `/schedule` (matches `config/schedule.json`) and `/queue` respond  
+5. Workflows imported (including **07 YouTube Shorts Publisher** and **16 Content Queue Preparer**)  
+6. Public Drive folder list (when folder id present)  
+7. If `GEMINI_API_KEY` is set: runs one Daily Publisher dry-run (prepares the queue head and finalizes it without posting)  
 
 ## Manual run
 
