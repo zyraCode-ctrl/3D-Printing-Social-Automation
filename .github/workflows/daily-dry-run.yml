@@ -126,7 +126,12 @@ jobs:
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           YOUTUBE_OAUTH_CLIENT_ID: ${{ secrets.YOUTUBE_OAUTH_CLIENT_ID }}
           YOUTUBE_OAUTH_CLIENT_SECRET: ${{ secrets.YOUTUBE_OAUTH_CLIENT_SECRET }}
-        run: python3 scripts/import_workflows.py
+        run: |
+          # Same AI setup as production: Gemini primary, Groq fallback (one call per product).
+          for v in GEMINI_API_KEY GROQ_API_KEY; do
+            [ -n "${!v}" ] || { echo "::error::secret $v is missing — the Gemini → Groq fallback cannot be verified"; exit 1; }
+          done
+          python3 scripts/import_workflows.py
 
       - name: Verify daily dry-run
         env:
