@@ -2,7 +2,8 @@
 """GitHub Actions gate for production publishing.
 
 GitHub cron cannot be rewritten by the default workflow token, so the production workflow ticks
-every 10 minutes and this gate decides what (if anything) the heavy job should do:
+(cron, plus the waiter job's self-dispatched `tick` runs — see next_wake) and this gate decides
+what (if anything) the heavy job should do:
 
 - publish: one of today's slots from config/schedule.json has started and is not handled yet
 - prepare: the content buffer is below target (refill; at most once an hour)
@@ -30,6 +31,11 @@ TIME_RE = re.compile(r"^([01]\d|2[0-3]):([0-5]\d)$")
 REFILL_INTERVAL = timedelta(minutes=60)
 # Must match SLOT_CATCHUP_MINUTES in the tracking-api: a slot missed by more than this is not posted late.
 CATCHUP = timedelta(minutes=int(os.environ.get("SLOT_CATCHUP_MINUTES", "180")))
+# The waiter job re-triggers the workflow at these offsets after every slot start (all inside CATCHUP),
+# so a slot runs even when GitHub drops the cron ticks; extra wakes are no-ops once the slot is handled.
+WAKE_OFFSETS = (timedelta(seconds=90), timedelta(minutes=35), timedelta(minutes=80))
+# GitHub-hosted jobs are killed after 6 hours; a waiter that cannot reach the next slot re-arms itself.
+MAX_SLEEP = timedelta(minutes=330)
 
 
 def get_tz(name: str) -> tzinfo:
@@ -76,7 +82,32 @@ def due_slot(schedule: dict, handled: set[str], now: datetime) -> str | None:
     return None
 
 
+def next_wake(schedule: dict, now: datetime) -> dict:
+    """When the waiter job should next trigger a tick: just after a slot starts (plus two retries
+    inside the catch-up window), or after MAX_SLEEP to re-arm when the next slot is further away."""
+    tz = get_tz(schedule["timezone"])
+    local = now.astimezone(tz)
+    skip = set(schedule.get("skip_slots") or [])
+    candidates = []
+    for offset in range(9):
+        for key in day_slots(schedule, local.date() + timedelta(days=offset)):
+            if key in skip:
+                continue
+            day, hm = key.split("T")
+            hh, mm = (int(p) for p in hm.split(":"))
+            start = datetime.fromisoformat(day).replace(hour=hh, minute=mm, tzinfo=tz)
+            candidates += [(start + off, key) for off in WAKE_OFFSETS if start + off > now]
+    if candidates:
+        wake, key = min(candidates)
+        if wake - now <= MAX_SLEEP:
+            return {"wake_at": wake.isoformat(), "seconds": int((wake - now).total_seconds()) + 1, "reason": f"slot {key}"}
+    wake = now + MAX_SLEEP
+    return {"wake_at": wake.isoformat(), "seconds": int(MAX_SLEEP.total_seconds()), "reason": "re-arm (next slot beyond one job)"}
+
+
 def decide(schedule: dict, slots: dict, queue: dict, now: datetime, event: str, mode: str = "auto") -> dict:
+    if event == "workflow_dispatch" and mode == "tick":
+        event = "schedule"
     handled = set(slots.get("handled") or []) | set(schedule.get("skip_slots") or [])
     slot = due_slot(schedule, handled, now)
     ready = queue.get("ready")
@@ -103,6 +134,13 @@ def decide(schedule: dict, slots: dict, queue: dict, now: datetime, event: str, 
 
 def main() -> int:
     schedule = load_schedule()
+    if "--next-wake" in sys.argv:
+        wake = next_wake(schedule, datetime.now(timezone.utc))
+        print(f"next wake {wake['wake_at']} in {wake['seconds']}s ({wake['reason']})")
+        if os.environ.get("GITHUB_OUTPUT"):
+            with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as fh:
+                fh.write(f"seconds={wake['seconds']}\nwake_at={wake['wake_at']}\n")
+        return 0
     event = os.environ.get("GITHUB_EVENT_NAME", "workflow_dispatch")
     mode = os.environ.get("GATE_MODE", "auto") or "auto"
     slots = read_json(STATE_DIR / "slots.json")
