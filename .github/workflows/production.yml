@@ -12,6 +12,14 @@ name: Production publisher
 on:
   schedule:
     - cron: "*/10 * * * *"
+    # GitHub drops high-frequency ticks under load; fixed ticks after the default 18:00 / 22:00 IST slots
+    # (12:30 / 16:30 UTC) keep them inside the 3-hour catch-up window. The gate makes extra ticks no-ops.
+    - cron: "31,46 12 * * *"
+    - cron: "7,37 13 * * *"
+    - cron: "17 14 * * *"
+    - cron: "31,46 16 * * *"
+    - cron: "7,37 17 * * *"
+    - cron: "17 18 * * *"
   workflow_dispatch:
     inputs:
       mode:
