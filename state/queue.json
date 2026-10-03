@@ -1,0 +1,8 @@
+{
+  "ready": 8,
+  "queue_size": 8,
+  "min_buffer": 6,
+  "last_refill_at": "2026-10-03T18:00:02+00:00",
+  "last_refill_ok": true,
+  "updated_at": "2026-10-03T18:00:02+00:00"
+}
