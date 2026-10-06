@@ -4,9 +4,9 @@
   "supported_images": ["jpg", "jpeg", "png", "webp"],
   "supported_videos": ["mp4", "mov"],
   "required_platforms": {
-    "image": ["instagram", "facebook", "pinterest"],
-    "video": ["instagram", "facebook", "pinterest", "youtube"],
-    "both": ["instagram", "facebook", "pinterest", "youtube"]
+    "image": ["instagram", "facebook"],
+    "video": ["instagram", "facebook", "youtube"],
+    "both": ["instagram", "facebook", "youtube"]
   },
   "platform_capabilities": {
     "instagram": {

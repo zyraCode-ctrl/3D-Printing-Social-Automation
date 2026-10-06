@@ -524,7 +524,7 @@ def test_meta_token() -> None:
 def test_video_platforms() -> None:
     check("video: Pinterest is no longer skipped (Video Pins)", "pinterest" not in S.skipped_platforms("video"), S.skipped_platforms("video"))
     check("image: YouTube is still skipped", "youtube" in S.skipped_platforms("image"))
-    check("video requires Instagram, Facebook, Pinterest and YouTube", S.required_platforms("video") == ["instagram", "facebook", "pinterest", "youtube"], S.required_platforms("video"))
+    check("video requires Instagram, Facebook and YouTube; Pinterest is best-effort", S.required_platforms("video") == ["instagram", "facebook", "youtube"], S.required_platforms("video"))
     check("YouTube Shorts default to public", S.runtime_config()["youtube_privacy_status"] == "public")
     with S.connect() as conn:
         for pid, overall, ig, pin_id in ((901, "previewed", "previewed", None), (902, "published", "published", None), (903, "partial", "published", None), (904, "pending", "pending", "pin-1")):
@@ -540,6 +540,21 @@ def test_video_platforms() -> None:
     check("migration: published / partially published products are never reopened", rows[902] == "skipped" and rows[903] == "skipped", rows)
     check("migration: product with a Pinterest post id is left alone", rows[904] == "skipped", rows)
     check("Pinterest for a reopened product is still blocked while DRY_RUN=true", S.can_publish(901, "pinterest")["allowed"] is False)
+
+    with S.connect() as conn:
+        conn.execute(
+            "INSERT INTO products (product_id, filename, media_type, overall_status, instagram_status, facebook_status, pinterest_status, youtube_status, created_at, updated_at) "
+            "VALUES (905, '905.mp4', 'video', 'partial', 'published', 'published', 'failed', 'published', ?, ?)",
+            (S.now_iso(), S.now_iso()),
+        )
+        conn.execute("INSERT INTO content_queue (product_id, status, claim_count, prepared_at) VALUES (905, 'prepared', 1, ?)", (S.now_iso(),))
+        conn.commit()
+    S.init_db()
+    row = S.connect().execute("SELECT p.overall_status, q.status FROM products p JOIN content_queue q USING (product_id) WHERE product_id = 905").fetchone()
+    check("best-effort Pinterest failure: product with IG/FB/YT published completes and leaves the queue", tuple(row) == ("published", "done"), tuple(row))
+    os.environ["DRY_RUN"] = "false"
+    check("failed Pinterest is still attempted on the next post (best-effort, not skipped)", S.can_publish(905, "pinterest")["allowed"] is True)
+    os.environ["DRY_RUN"] = "true"
 
 
 def main() -> int:

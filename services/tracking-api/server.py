@@ -115,9 +115,23 @@ def init_db() -> None:
             """,
             (now_iso(),),
         ).rowcount
+        # Required platforms come from settings and can change (e.g. a platform made best-effort); a partial
+        # product whose required platforms all succeeded is complete and must leave the queue.
+        settled = []
+        for row in conn.execute("SELECT * FROM products WHERE overall_status = 'partial'").fetchall():
+            record = row_to_dict(row)
+            if record and compute_overall(record, str(record["media_type"])) == "published":
+                conn.execute(
+                    "UPDATE products SET overall_status = 'published', published_at = COALESCE(published_at, ?), updated_at = ? WHERE product_id = ?",
+                    (now_iso(), now_iso(), record["product_id"]),
+                )
+                settle_queue(conn, int(record["product_id"]), "published")
+                settled.append(record["product_id"])
         conn.commit()
     if reopened:
         print(f"Reopened Pinterest for {reopened} unpublished video products (Video Pins)", flush=True)
+    if settled:
+        print(f"Completed partial products whose required platforms all published: {settled}", flush=True)
 
 
 def load_settings_file() -> dict[str, Any]:
