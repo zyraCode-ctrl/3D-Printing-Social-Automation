@@ -33,6 +33,9 @@ EXPECTED_PAGE_ID = os.environ.get("EXPECTED_PAGE_ID", "1294584743741605")
 DAILY = "3dprDailyPub0001"
 PREPARER = "3dprQueuePrep016"
 PATH_CHECK = "3dprPathCheck017"
+META_REQUIRED_SCOPES = ("pages_show_list", "pages_read_engagement", "pages_manage_posts", "instagram_basic", "instagram_content_publish")
+META_TOKEN_MIN_DAYS = float(os.environ.get("META_TOKEN_MIN_DAYS", "7"))
+META_TOKEN_WARN_DAYS = float(os.environ.get("META_TOKEN_WARN_DAYS", "14"))
 PROBES = {
     "meta": "3dprMetaAuthProbe09",
     "youtube": "3dprYtAuthProbe10",
@@ -124,6 +127,42 @@ def node_json(run_data: dict, name: str) -> dict:
     return {}
 
 
+def meta_token_checks(debug: dict, page_id: str, now: float) -> list[dict]:
+    """Checks on the Page token the publishers derive from the configured credential (debug_token metadata).
+    expires_at 0 means the Page token does not expire; data_access_expires_at still requires re-consent."""
+    debug = debug or {}
+    scopes = set(debug.get("scopes") or [])
+    missing = sorted(set(META_REQUIRED_SCOPES) - scopes)
+    limits = [t for t in (debug.get("expires_at"), debug.get("data_access_expires_at")) if t]
+    effective = min(limits) if limits else None
+    remaining_days = None if effective is None else (effective - now) / 86400
+    when = "never" if effective is None else datetime.fromtimestamp(effective, timezone.utc).isoformat(timespec="minutes")
+    is_page = debug.get("valid") is True and debug.get("type") == "PAGE" and str(debug.get("profile_id")) == str(page_id)
+    return [
+        {
+            "check": "Meta: credential yields a valid Page access token for the configured Page",
+            "ok": is_page,
+            "detail": f"valid={debug.get('valid')} type={debug.get('type')} profile_id={debug.get('profile_id')} expected={page_id} error={debug.get('error')}",
+        },
+        {
+            "check": "Meta: required Facebook/Instagram permissions granted",
+            "ok": not missing and bool(scopes),
+            "detail": f"missing={missing}",
+        },
+        {
+            "check": f"Meta: token lifetime at least {META_TOKEN_MIN_DAYS} days",
+            "ok": remaining_days is None or remaining_days >= META_TOKEN_MIN_DAYS,
+            "detail": f"expires={when} remaining_days={None if remaining_days is None else round(remaining_days, 1)} (expires_at={debug.get('expires_at')}, data_access_expires_at={debug.get('data_access_expires_at')})",
+        },
+        {
+            "check": f"Meta: token renewal not due within {META_TOKEN_WARN_DAYS} days",
+            "ok": remaining_days is None or remaining_days >= META_TOKEN_WARN_DAYS,
+            "detail": f"expires={when}",
+            "advisory": True,
+        },
+    ]
+
+
 def validate(strict: bool, expect_live: bool | None, preflight: bool = False, deep: bool = False) -> dict:
     """Full validation; with preflight=True only safety-critical checks block a publish run
     (a YouTube/Pinterest/AI hiccup must not stop Instagram + Facebook — those platforms fail on their own)."""
@@ -156,6 +195,9 @@ def validate(strict: bool, expect_live: bool | None, preflight: bool = False, de
         f"configured={meta.get('configured_ig_user_id')} discovered={meta.get('discovered_ig_user_id')} ig=@{details.get('ig_username')}",
         critical=True,
     )
+    # Blocking for full validation (go-live / credential sync); advisory in the pre-publish check.
+    for c in meta_token_checks(meta.get("page_token_debug") or {}, EXPECTED_PAGE_ID, time.time()):
+        add(c["check"], c["ok"], c["detail"], blocking=not c.get("advisory"))
 
     status, run = stack.run(PROBES["youtube"], timeout=180)
     yt = node_json(run, "Summarize Probe")

@@ -491,9 +491,38 @@ def test_gate() -> None:
     check("gate reads the committed config/schedule.json", real["publish_times"] == json.loads((ROOT / "config" / "schedule.json").read_text())["publish_times"])
 
 
+def test_meta_token() -> None:
+    spec = importlib.util.spec_from_file_location("production_ops", ROOT / "scripts" / "production_ops.py")
+    ops = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(ops)
+    now = 1_790_000_000.0
+    page = "1294584743741605"
+    scopes = ["pages_show_list", "pages_read_engagement", "pages_manage_posts", "instagram_basic", "instagram_content_publish", "business_management"]
+    good = {"valid": True, "type": "PAGE", "profile_id": page, "scopes": scopes, "expires_at": 0, "data_access_expires_at": now + 80 * 86400}
+
+    def result(debug: dict) -> dict:
+        return {c["check"].split(":")[1].strip().split(" ")[0] + ("-advisory" if c.get("advisory") else ""): c["ok"] for c in ops.meta_token_checks(debug, page, now)}
+
+    r = result(good)
+    check("meta token: non-expiring Page token for zyra3d.store passes (no 'never expires' USER requirement)", all(r.values()), r)
+    r = result({**good, "type": "USER", "profile_id": None, "expires_at": now + 3600})
+    check("meta token: short-lived USER token fails the Page-token and lifetime checks", not r["credential"] and not r["token"], r)
+    check("meta token: wrong Page fails", not result({**good, "profile_id": "999"})["credential"])
+    check("meta token: invalid token fails", not result({**good, "valid": False})["credential"])
+    check("meta token: missing instagram_content_publish fails", not result({**good, "scopes": [s for s in scopes if s != "instagram_content_publish"]})["required"])
+    r = result({**good, "data_access_expires_at": now + 3 * 86400})
+    check("meta token: data access ending within 7 days fails the lifetime check", not r["token"], r)
+    r = result({**good, "data_access_expires_at": now + 10 * 86400})
+    check("meta token: 10 days left passes lifetime but raises the renewal advisory", r["token"] and not r["token-advisory"], r)
+    r = result({**good, "expires_at": now + 59 * 86400, "data_access_expires_at": 0})
+    check("meta token: 59-day token passes", all(r.values()), r)
+    check("meta token: no debug data fails closed", not any(v for k, v in result({}).items() if not k.endswith("advisory") and k != "token"))
+
+
 def main() -> int:
     try:
-        for test in (test_schedule, test_schedule_save_rules, test_github_sync, test_queue_dry_run, test_queue_live, test_persistence, test_scheduler, test_http, test_gate):
+        for test in (test_schedule, test_schedule_save_rules, test_github_sync, test_queue_dry_run, test_queue_live, test_persistence, test_scheduler, test_http, test_gate, test_meta_token):
             print(f"\n== {test.__name__} ==")
             test()
     finally:

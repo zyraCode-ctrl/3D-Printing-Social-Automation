@@ -2045,6 +2045,24 @@ return [{ json: {
             )
         )
     nodes.append(
+        node(
+            "meta",
+            "Debug Page Token",
+            "n8n-nodes-base.httpRequest",
+            4.5,
+            {
+                "method": "GET",
+                "url": "={{ $('Build Probe URLs').first().json.graph_base + '/debug_token?input_token=' + encodeURIComponent($('Probe Page').first().json.access_token || 'missing') }}",
+                "authentication": "predefinedCredentialType",
+                "nodeCredentialType": "facebookGraphApi",
+                "options": {"timeout": 60000},
+            },
+            [1440, -200],
+            credentials=META_CRED,
+            onError="continueRegularOutput",
+        )
+    )
+    nodes.append(
         code(
             "meta",
             "Summarize Probe",
@@ -2054,8 +2072,20 @@ const me = $('Probe Token').first().json;
 const page = $('Probe Page').first().json;
 const pageMe = $('Probe Page Identity').first().json;
 const reels = $('Probe Page Reels').first().json;
+const dbg = $('Debug Page Token').first().json || {};
 const errText = (r) => r && r.error ? (r.error.description || r.error.message || JSON.stringify(r.error)) : null;
 const igFromPage = page && page.instagram_business_account ? page.instagram_business_account.id : null;
+const td = dbg.data || {};
+// Only metadata from debug_token: never the token itself.
+const pageTokenDebug = {
+  valid: td.is_valid === true,
+  type: td.type || null,
+  profile_id: td.profile_id ? String(td.profile_id) : null,
+  scopes: td.scopes || [],
+  expires_at: typeof td.expires_at === 'number' ? td.expires_at : null,
+  data_access_expires_at: typeof td.data_access_expires_at === 'number' ? td.data_access_expires_at : null,
+  error: errText(dbg) || (td.error ? String(td.error.message || JSON.stringify(td.error)) : null)
+};
 return [{ json: {
   dry_run: built.dry_run,
   readiness: built.readiness,
@@ -2079,6 +2109,7 @@ return [{ json: {
   configured_ig_user_id: built.ig_user_id || null,
   discovered_ig_user_id: igFromPage,
   ids_match: Boolean(built.ig_user_id) && String(built.ig_user_id) === String(igFromPage || ''),
+  page_token_debug: pageTokenDebug,
   note: 'No content was published. Keep DRY_RUN=true until you explicitly approve a live post.'
 } }];
 """,
@@ -2094,7 +2125,8 @@ return [{ json: {
         ("Probe Accounts", "Probe Page"),
         ("Probe Page", "Probe Page Identity"),
         ("Probe Page Identity", "Probe Page Reels"),
-        ("Probe Page Reels", "Summarize Probe"),
+        ("Probe Page Reels", "Debug Page Token"),
+        ("Debug Page Token", "Summarize Probe"),
     ]
     return workflow("09 Meta Auth Probe", "3dprMetaAuthProbe09", nodes, pairs)
 

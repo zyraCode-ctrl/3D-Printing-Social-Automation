@@ -21,6 +21,7 @@ Production runs entirely on free GitHub-hosted runners via `.github/workflows/pr
 
 - Nothing is published unless the repository variable **`PRODUCTION_LIVE`** is `true`.
 - Every run validates first: Page token acts as Page `1294584743741605` (never a personal profile), the Instagram account is linked to that Page, duplicate prevention and queue integrity. Publishing is blocked if any of these fail. YouTube OAuth, the Pinterest board, the Groq fallback and the schedule are also checked and reported.
+- Meta token check (09 Meta Auth Probe → `debug_token` on the Page token the publishers derive from the credential): must be a valid `PAGE` token for `1294584743741605` with `pages_show_list`, `pages_read_engagement`, `pages_manage_posts`, `instagram_basic`, `instagram_content_publish`, and at least 7 days before `expires_at` / `data_access_expires_at` (`expires_at = 0` means the Page token never expires). The credential may hold a long-lived USER token or a Page token. These checks block a full validation (go-live, credential sync); in the pre-publish check they are advisory, with a renewal warning under 14 days.
 - The public dashboard data is scrubbed of anything token-shaped.
 
 ## State
