@@ -133,7 +133,7 @@ def at(hh: int, mm: int, day_offset: int = 0) -> datetime:
 
 def publish_all(product_id: int) -> None:
     S.mark_processing(product_id)
-    for platform in ("instagram", "facebook", "youtube"):
+    for platform in ("instagram", "facebook", "pinterest", "youtube"):
         S.save_platform_result(product_id, platform, "published", f"{platform}-post-{product_id}", None)
     S.finalize_product(product_id)
 
@@ -274,6 +274,7 @@ def test_queue_live() -> None:
     S.mark_processing(4)
     S.save_platform_result(4, "instagram", "failed", None, "Graph API error")
     S.save_platform_result(4, "facebook", "published", "fb-4", None)
+    S.save_platform_result(4, "pinterest", "published", "pin-4", None)
     S.save_platform_result(4, "youtube", "failed", None, "quota exceeded")
     S.finalize_product(4)
     q = S.connect().execute("SELECT status, run_slot, last_error FROM content_queue WHERE product_id = 4").fetchone()
@@ -296,7 +297,7 @@ def test_queue_live() -> None:
         claim = S.claim_next()
         check(f"live: attempt {attempt} claims Product 5", claim.get("found") and claim.get("product_id") == 5, claim)
         S.mark_processing(5)
-        for platform in ("instagram", "facebook", "youtube"):
+        for platform in ("instagram", "facebook", "pinterest", "youtube"):
             S.save_platform_result(5, platform, "failed", None, "down")
         S.finalize_product(5)
     q = S.connect().execute("SELECT status, last_error FROM content_queue WHERE product_id = 5").fetchone()
@@ -520,9 +521,30 @@ def test_meta_token() -> None:
     check("meta token: no debug data fails closed", not any(v for k, v in result({}).items() if not k.endswith("advisory") and k != "token"))
 
 
+def test_video_platforms() -> None:
+    check("video: Pinterest is no longer skipped (Video Pins)", "pinterest" not in S.skipped_platforms("video"), S.skipped_platforms("video"))
+    check("image: YouTube is still skipped", "youtube" in S.skipped_platforms("image"))
+    check("video requires Instagram, Facebook, Pinterest and YouTube", S.required_platforms("video") == ["instagram", "facebook", "pinterest", "youtube"], S.required_platforms("video"))
+    check("YouTube Shorts default to public", S.runtime_config()["youtube_privacy_status"] == "public")
+    with S.connect() as conn:
+        for pid, overall, ig, pin_id in ((901, "previewed", "previewed", None), (902, "published", "published", None), (903, "partial", "published", None), (904, "pending", "pending", "pin-1")):
+            conn.execute(
+                "INSERT INTO products (product_id, filename, media_type, overall_status, instagram_status, facebook_status, pinterest_status, youtube_status, pinterest_post_id, created_at, updated_at) "
+                "VALUES (?, ?, 'video', ?, ?, ?, 'skipped', 'pending', ?, ?, ?)",
+                (pid, f"{pid}.mp4", overall, ig, ig, pin_id, S.now_iso(), S.now_iso()),
+            )
+        conn.commit()
+    S.init_db()
+    rows = dict(S.connect().execute("SELECT product_id, pinterest_status FROM products WHERE product_id >= 901").fetchall())
+    check("migration: unpublished video product gets Pinterest reopened", rows[901] == "pending", rows)
+    check("migration: published / partially published products are never reopened", rows[902] == "skipped" and rows[903] == "skipped", rows)
+    check("migration: product with a Pinterest post id is left alone", rows[904] == "skipped", rows)
+    check("Pinterest for a reopened product is still blocked while DRY_RUN=true", S.can_publish(901, "pinterest")["allowed"] is False)
+
+
 def main() -> int:
     try:
-        for test in (test_schedule, test_schedule_save_rules, test_github_sync, test_queue_dry_run, test_queue_live, test_persistence, test_scheduler, test_http, test_gate, test_meta_token):
+        for test in (test_schedule, test_schedule_save_rules, test_github_sync, test_queue_dry_run, test_queue_live, test_persistence, test_scheduler, test_http, test_gate, test_meta_token, test_video_platforms):
             print(f"\n== {test.__name__} ==")
             test()
     finally:

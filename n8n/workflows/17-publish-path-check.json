@@ -14,7 +14,7 @@
         -300
       ],
       "parameters": {
-        "content": "## Publish Path Check (no posting)\n\nCalls **04 Instagram Publisher** and **05 Facebook Publisher** for the queue head with `validate_only: true`.\nInstagram: container + resumable upload + wait for FINISHED, **no media_publish** (the container expires unused).\nFacebook: Page token guard + Reel upload session, **never finished** (nothing is published).\nNo platform results are recorded.\n",
+        "content": "## Publish Path Check (no posting)\n\nCalls **04 Instagram Publisher** and **05 Facebook Publisher** for the queue head with `validate_only: true`.\nInstagram: container + resumable upload + wait for FINISHED, **no media_publish** (the container expires unused).\nFacebook: Page token guard + Reel upload session, **never finished** (nothing is published).\nPinterest: video uploaded to Pinterest media + processed, **no Pin created**.\nYouTube: resumable upload session opened with public Shorts metadata, **no bytes sent** (no video).\nNo platform results are recorded.\n",
         "width": 360,
         "height": 280,
         "color": 4
@@ -154,16 +154,88 @@
       "onError": "continueRegularOutput"
     },
     {
+      "id": "de587463-a6e1-59da-95b4-4205b8f2abf4",
+      "name": "Pinterest Head",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1220,
+        160
+      ],
+      "parameters": {
+        "jsCode": "return [{ json: $('Pick Queue Head').first().json }];\n"
+      }
+    },
+    {
+      "id": "476da8ea-c74e-5562-a2f5-049c89558476",
+      "name": "Check Pinterest Path",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.3,
+      "position": [
+        1340,
+        0
+      ],
+      "parameters": {
+        "source": "database",
+        "workflowId": {
+          "__rl": true,
+          "value": "3dprPinterest06",
+          "mode": "id",
+          "cachedResultName": "06 Pinterest Publisher"
+        },
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "2f6867fa-67f8-5145-86c4-ed0692bf289b",
+      "name": "YouTube Head",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1460,
+        160
+      ],
+      "parameters": {
+        "jsCode": "return [{ json: $('Pick Queue Head').first().json }];\n"
+      }
+    },
+    {
+      "id": "3ac82fd7-7f1d-55ec-b238-64a6de25e67c",
+      "name": "Check YouTube Path",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.3,
+      "position": [
+        1580,
+        0
+      ],
+      "parameters": {
+        "source": "database",
+        "workflowId": {
+          "__rl": true,
+          "value": "3dprYouTube0007",
+          "mode": "id",
+          "cachedResultName": "07 YouTube Shorts Publisher"
+        },
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
       "id": "1b173409-b2f2-5411-bd40-3a42865b052f",
       "name": "Summarize Check",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        1320,
+        1800,
         0
       ],
       "parameters": {
-        "jsCode": "const job = $('Keep Job').first().json;\nconst ig = job.instagram || {};\nconst fb = $json || {};\nconst ok = (r) => r.status === 'validated' && r.validate_only === true;\nreturn [{ json: {\n  product_id: job.product_id,\n  filename: job.filename,\n  media_ok: !!(job.media && job.media.ok),\n  media_error: (job.media && job.media.error) || null,\n  instagram_ok: ok(ig),\n  facebook_ok: ok(fb),\n  instagram: { status: ig.status, container_id: ig.container_id || null, status_code: ig.status_code || null, error: ig.error_message || ig.error || null },\n  facebook: { status: fb.status, page_id: fb.page_id || null, page_name: fb.page_name || null, upload_session: fb.upload_session || null, error: fb.error_message || fb.error || null },\n  published_anything: false\n} }];\n"
+        "jsCode": "const get = (n) => { try { return $(n).last().json; } catch (e) { return null; } };\n\nconst job = $('Keep Job').first().json;\nconst ig = job.instagram || {};\nconst fb = get('Check Facebook Path') || {};\nconst pin = get('Check Pinterest Path') || {};\nconst yt = get('Check YouTube Path') || {};\nconst ok = (r) => r.status === 'validated' && r.validate_only === true;\nreturn [{ json: {\n  product_id: job.product_id,\n  filename: job.filename,\n  media_ok: !!(job.media && job.media.ok),\n  media_error: (job.media && job.media.error) || null,\n  instagram_ok: ok(ig),\n  facebook_ok: ok(fb),\n  pinterest_ok: ok(pin),\n  youtube_ok: ok(yt),\n  instagram: { status: ig.status, container_id: ig.container_id || null, status_code: ig.status_code || null, error: ig.error_message || ig.error || null },\n  facebook: { status: fb.status, page_id: fb.page_id || null, page_name: fb.page_name || null, upload_session: fb.upload_session || null, error: fb.error_message || fb.error || null },\n  pinterest: { status: pin.status, is_video: pin.is_video === true, board_id: pin.board_id || null, media_id: pin.media_id || null, media_status: pin.media_status || null, error: pin.error_message || pin.error || null },\n  youtube: { status: yt.status, privacy_status: yt.privacy_status || null, shorts: yt.shorts === true, error: yt.error_message || yt.error || null },\n  published_anything: false\n} }];\n"
       }
     }
   ],
@@ -246,6 +318,50 @@
       ]
     },
     "Check Facebook Path": {
+      "main": [
+        [
+          {
+            "node": "Pinterest Head",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Pinterest Head": {
+      "main": [
+        [
+          {
+            "node": "Check Pinterest Path",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Pinterest Path": {
+      "main": [
+        [
+          {
+            "node": "YouTube Head",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "YouTube Head": {
+      "main": [
+        [
+          {
+            "node": "Check YouTube Path",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check YouTube Path": {
       "main": [
         [
           {

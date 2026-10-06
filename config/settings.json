@@ -5,7 +5,7 @@
   "supported_videos": ["mp4", "mov"],
   "required_platforms": {
     "image": ["instagram", "facebook", "pinterest"],
-    "video": ["instagram", "facebook", "youtube"],
+    "video": ["instagram", "facebook", "pinterest", "youtube"],
     "both": ["instagram", "facebook", "pinterest", "youtube"]
   },
   "platform_capabilities": {
@@ -30,7 +30,7 @@
       "notes": "YouTube Shorts only via YouTube Data API v3. Image-only products are skipped. Long-form uploads are not used."
     }
   },
-  "youtube_privacy_status": "private",
+  "youtube_privacy_status": "public",
   "youtube_format": "shorts",
   "website_url": "",
   "include_website_url": false,

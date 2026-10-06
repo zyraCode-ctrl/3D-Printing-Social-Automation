@@ -20,4 +20,4 @@ Keep `DRY_RUN=true` until the owner explicitly approves real publishing (step 9)
 - Do **not** set `DRY_RUN=false` without explicit approval.
 - Do **not** paste App ID, App Secret, Client IDs, Client Secrets, or access tokens into chat — only into n8n Credentials or GitHub Secrets UI.
 - In this project, **YouTube always means YouTube Shorts** (never long-form).
-- Pinterest creates **image Pins only**; video products are skipped.
+- Pinterest creates **Video Pins** for video products and image Pins for images.

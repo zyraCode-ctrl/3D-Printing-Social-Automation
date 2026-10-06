@@ -53,7 +53,7 @@ At each selected time, **01 Daily Publisher**:
 Required platforms:
 
 - Image-only: Instagram, Facebook Page, Pinterest. YouTube Shorts are skipped (Shorts need video).
-- Video-only: Instagram Reels, Facebook Page, **YouTube Shorts**. Pinterest image Pins are skipped.
+- Video-only: Instagram Reels, Facebook Page, **Pinterest Video Pins**, **YouTube Shorts**.
 - Both image+video: Instagram, Facebook, Pinterest, **YouTube Shorts**.
 - Image + video: all four, using the video where the platform is video-capable and the image for Pinterest.
 
@@ -147,14 +147,14 @@ Setup guide: [docs/YOUTUBE_SHORTS_SETUP.md](docs/YOUTUBE_SHORTS_SETUP.md)
 1. Enable **YouTube Data API v3** in Google Cloud.
 2. Create an OAuth client (Web application) with redirect `http://localhost:5678/rest/oauth2-credential/callback`.
 3. In n8n, open **YouTube account** and complete OAuth (Client ID/Secret stay in n8n only).
-4. Keep `YOUTUBE_PRIVACY_STATUS=private`.
+4. Set `YOUTUBE_PRIVACY_STATUS=public` (production default).
 5. Keep `DRY_RUN=true` until you explicitly approve publishing.
 
 Drive video products are treated as Shorts. Image-only products skip YouTube.
 
 ### Pinterest (API v5) — do now
 
-Image Pins only. Videos are skipped on purpose.
+Video products publish as Video Pins; image products as image Pins.
 
 Full click-by-click setup: [docs/PINTEREST_SETUP.md](docs/PINTEREST_SETUP.md)
 
@@ -227,4 +227,4 @@ scripts/
 
 ## Live publishing
 
-Do **not** set `DRY_RUN=false` until you say so. The first live YouTube run should still use `YOUTUBE_PRIVACY_STATUS=private` and publish a Short only (never long-form).
+Do **not** set `DRY_RUN=false` until you say so. YouTube publishes Shorts only (never long-form) with `YOUTUBE_PRIVACY_STATUS=public`.

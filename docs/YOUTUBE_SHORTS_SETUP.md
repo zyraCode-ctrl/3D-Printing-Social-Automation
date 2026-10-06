@@ -13,7 +13,7 @@ Keep `DRY_RUN=true`. Do **not** publish or upload. Do **not** paste Client ID, C
 | Readiness API | `GET /youtube/readiness` on tracking-api |
 | Credential slot | n8n **YouTube account** (`youTubeOAuth2Api`) |
 | Format | `youtube_format=shorts` |
-| Privacy default | `YOUTUBE_PRIVACY_STATUS=private` |
+| Privacy default | `YOUTUBE_PRIVACY_STATUS=public` |
 | Redirect URI | `http://localhost:5678/rest/oauth2-credential/callback` |
 | Env / Actions secret names | `YOUTUBE_OAUTH_CLIENT_ID`, `YOUTUBE_OAUTH_CLIENT_SECRET` (optional prefills only) |
 | Required scopes | `https://www.googleapis.com/auth/youtube.upload` · `https://www.googleapis.com/auth/youtube.readonly` |

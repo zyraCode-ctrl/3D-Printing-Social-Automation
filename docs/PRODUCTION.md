@@ -38,7 +38,7 @@ The tracking DB, generated content and n8n credentials (including refreshed OAut
 | Variable | `FACEBOOK_PAGE_ID` | `1294584743741605` |
 | Variable | `INSTAGRAM_BUSINESS_ACCOUNT_ID` | `17841443595297445` |
 | Variable | `PINTEREST_BOARD_ID` | `1074601229777946521` |
-| Variable | `YOUTUBE_PRIVACY_STATUS` | `private`, `unlisted` or `public` |
+| Variable | `YOUTUBE_PRIVACY_STATUS` | `public` (Shorts go live; `private`/`unlisted` also accepted) |
 
 ## Operations
 
@@ -50,5 +50,6 @@ The tracking DB, generated content and n8n credentials (including refreshed OAut
 ## Known limits
 
 - Google OAuth consent screens in *Testing* mode issue refresh tokens that expire after 7 days. Publish the consent screen to *In production* so YouTube keeps working.
-- Pinterest only publishes image Pins; video products skip Pinterest.
+- Video products publish to Instagram, Facebook, Pinterest (Video Pin on `PINTEREST_BOARD_ID`) and YouTube (public Short). Each platform publishes independently; a failure on one never blocks the others and is retried on the next slot without re-posting the platforms that succeeded.
+- `validate --deep` exercises all four publish paths with no posting: IG container, FB Reel session (never finished), Pinterest video upload + processing (no Pin created), YouTube resumable upload session (no bytes sent).
 - GitHub disables scheduled workflows after 60 days without repository activity; production state commits count as activity.

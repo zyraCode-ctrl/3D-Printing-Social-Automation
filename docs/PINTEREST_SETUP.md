@@ -1,6 +1,6 @@
 # Pinterest setup (active phase)
 
-Official **Pinterest API v5** only. Image Pins only — video products are skipped on purpose.
+Official **Pinterest API v5** only. Video products become **Video Pins** (`POST /v5/media` → S3 upload → poll until `succeeded` → `POST /v5/pins` with `video_id`); image products become image Pins.
 
 Keep `DRY_RUN=true`. Do **not** create Pins or publish. Do **not** paste App ID, App Secret, or tokens into chat.
 

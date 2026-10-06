@@ -104,7 +104,20 @@ def init_db() -> None:
         if "run_slot" not in columns:
             conn.execute("ALTER TABLE content_queue ADD COLUMN run_slot TEXT")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_queue_slot ON content_queue(run_slot)")
+        # Video Pins replaced the old "video products are skipped on Pinterest" rule. Only products that have
+        # not been published anywhere are reopened, so a published product is never selected again.
+        reopened = conn.execute(
+            """
+            UPDATE products SET pinterest_status = 'pending', updated_at = ?
+            WHERE media_type = 'video' AND pinterest_status = 'skipped' AND pinterest_post_id IS NULL
+              AND overall_status IN ('pending', 'previewed', 'failed')
+              AND 'published' NOT IN (instagram_status, facebook_status, youtube_status)
+            """,
+            (now_iso(),),
+        ).rowcount
         conn.commit()
+    if reopened:
+        print(f"Reopened Pinterest for {reopened} unpublished video products (Video Pins)", flush=True)
 
 
 def load_settings_file() -> dict[str, Any]:
@@ -274,7 +287,7 @@ def runtime_config() -> dict[str, Any]:
         "instagram_business_account_id": os.environ.get("INSTAGRAM_BUSINESS_ACCOUNT_ID", ""),
         "meta_graph_version": os.environ.get("META_GRAPH_VERSION", "v22.0"),
         "pinterest_board_id": os.environ.get("PINTEREST_BOARD_ID", ""),
-        "youtube_privacy_status": os.environ.get("YOUTUBE_PRIVACY_STATUS", settings.get("youtube_privacy_status", "private")),
+        "youtube_privacy_status": os.environ.get("YOUTUBE_PRIVACY_STATUS", settings.get("youtube_privacy_status", "public")),
         "youtube_format": settings.get("youtube_format", "shorts"),
         "youtube_oauth_redirect_uri": "http://localhost:5678/rest/oauth2-credential/callback",
         "website_url": os.environ.get("WEBSITE_URL", "") or settings.get("website_url", ""),
@@ -349,8 +362,6 @@ def skipped_platforms(media_type: str) -> dict[str, str]:
     skips: dict[str, str] = {}
     if media_type == "image":
         skips["youtube"] = "YouTube Shorts require video media. Image-only products are skipped."
-    if media_type == "video":
-        skips["pinterest"] = "This workflow creates image Pins only. Video products are skipped on Pinterest."
     return skips
 
 
@@ -1125,6 +1136,8 @@ def pinterest_s3_upload(body: dict[str, Any]) -> dict[str, Any]:
             return {"ok": 200 <= resp.status < 300, "status": resp.status, "bytes": target.stat().st_size}
     except urllib_error.HTTPError as exc:
         return {"ok": False, "status": exc.code, "error": exc.read().decode("utf-8", "replace")[:500]}
+    except (urllib_error.URLError, TimeoutError, OSError) as exc:
+        return {"ok": False, "status": None, "error": f"S3 upload connection failed: {exc}"[:500]}
 
 
 def reset_preview(product_id: int) -> dict[str, Any]:

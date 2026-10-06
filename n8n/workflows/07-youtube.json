@@ -14,7 +14,7 @@
         -260
       ],
       "parameters": {
-        "content": "## YouTube Shorts only (official YouTube Data API v3)\n\nThis automation publishes **YouTube Shorts only** \u2014 never long-form videos.\n\n- Video products from Google Drive are treated as Shorts.\n- Image-only products are skipped.\n- Default privacy is **private** for testing (`YOUTUBE_PRIVACY_STATUS=private`).\n- Description/hashtags include `#Shorts` for Shorts discovery.\n- Attach **YouTube OAuth2 API** credentials before any live run.\n- `DRY_RUN=true` stops at Duplicate Check \u2014 nothing is uploaded.\n",
+        "content": "## YouTube Shorts only (official YouTube Data API v3)\n\nThis automation publishes **YouTube Shorts only** \u2014 never long-form videos.\n\n- Video products from Google Drive are treated as Shorts.\n- Image-only products are skipped.\n- Privacy comes from `YOUTUBE_PRIVACY_STATUS` (production: **public**).\n- Description/hashtags include `#Shorts` for Shorts discovery.\n- Attach **YouTube OAuth2 API** credentials before any live run.\n- `DRY_RUN=true` stops at Duplicate Check \u2014 nothing is uploaded.\n- `validate_only` opens a resumable upload session with the real metadata, never sends the\n  video bytes (an unfinished session creates no video) and records nothing.\n",
         "width": 380,
         "height": 360,
         "color": 4
@@ -70,7 +70,7 @@
           "conditions": [
             {
               "id": "75e46daa-3c83-5716-8fa7-970d450dcaf7",
-              "leftValue": "={{ $json.allowed }}",
+              "leftValue": "={{ $json.allowed || ($('When Called by Another Workflow').first().json.validate_only === true) }}",
               "rightValue": true,
               "operator": {
                 "type": "boolean",
@@ -141,7 +141,7 @@
         -120
       ],
       "parameters": {
-        "jsCode": "const job = $('When Called by Another Workflow').first().json;\nconst config = $('Load Config').first().json;\nconst preview = $json;\nconst mediaType = String(preview.media_type || job.media_type || '');\nif (mediaType === 'image') {\n  return [{ json: {\n    product_id: job.product_id,\n    platform: 'youtube',\n    status: 'skipped',\n    skipped: true,\n    reason: 'YouTube Shorts require video media. Image-only products are skipped.',\n    skip_upload: true\n  } }];\n}\nconst content = (preview && preview.content) || job.content || {};\nconst yt = content.youtube || {};\nlet title = String(yt.title || '').trim();\nif (title.length > 70) title = title.slice(0, 67).trim() + '...';\nlet description = String(yt.description || '').trim();\nconst hashtags = Array.isArray(yt.hashtags) ? yt.hashtags.map(String) : [];\nconst tags = Array.isArray(yt.tags) ? yt.tags.map(String) : [];\nconst lowerTags = hashtags.map((h) => h.toLowerCase());\nif (!lowerTags.some((h) => h.replace(/^#/, '') === 'shorts')) {\n  hashtags.push('#shorts');\n}\nif (!/\\b#?shorts\\b/i.test(description)) {\n  description = (description ? description + '\\n\\n' : '') + '#Shorts';\n}\nconst tagLine = hashtags.join(' ');\nif (tagLine && !description.includes(tagLine)) {\n  description = description + '\\n' + tagLine;\n}\nreturn [{ json: {\n  product_id: job.product_id,\n  platform: 'youtube',\n  skip_upload: false,\n  shorts: true,\n  title,\n  description,\n  tags,\n  hashtags,\n  privacyStatus: config.youtube_privacy_status || 'private',\n  filename: preview.filename || job.filename || null,\n  drive_file_id: preview.drive_file_id || job.drive_file_id || null,\n  local_path: job.local_path || preview.local_path || null,\n  content\n} }];\n"
+        "jsCode": "const job = $('When Called by Another Workflow').first().json;\nconst config = $('Load Config').first().json;\nconst preview = $json;\nconst mediaType = String(preview.media_type || job.media_type || '');\nif (mediaType === 'image') {\n  return [{ json: {\n    product_id: job.product_id,\n    platform: 'youtube',\n    status: 'skipped',\n    skipped: true,\n    reason: 'YouTube Shorts require video media. Image-only products are skipped.',\n    skip_upload: true\n  } }];\n}\nconst content = (preview && preview.content) || job.content || {};\nconst yt = content.youtube || {};\nlet title = String(yt.title || '').trim();\nif (title.length > 70) title = title.slice(0, 67).trim() + '...';\nlet description = String(yt.description || '').trim();\nconst hashtags = Array.isArray(yt.hashtags) ? yt.hashtags.map(String) : [];\nconst tags = Array.isArray(yt.tags) ? yt.tags.map(String) : [];\nconst lowerTags = hashtags.map((h) => h.toLowerCase());\nif (!lowerTags.some((h) => h.replace(/^#/, '') === 'shorts')) {\n  hashtags.push('#shorts');\n}\nif (!/\\b#?shorts\\b/i.test(description)) {\n  description = (description ? description + '\\n\\n' : '') + '#Shorts';\n}\nconst tagLine = hashtags.join(' ');\nif (tagLine && !description.includes(tagLine)) {\n  description = description + '\\n' + tagLine;\n}\nreturn [{ json: {\n  product_id: job.product_id,\n  platform: 'youtube',\n  skip_upload: false,\n  shorts: true,\n  title,\n  description,\n  tags,\n  hashtags,\n  privacyStatus: config.youtube_privacy_status || 'public',\n  filename: preview.filename || job.filename || null,\n  drive_file_id: preview.drive_file_id || job.drive_file_id || null,\n  local_path: job.local_path || preview.local_path || null,\n  content\n} }];\n"
       }
     },
     {
@@ -177,6 +177,84 @@
         },
         "options": {}
       }
+    },
+    {
+      "id": "692bb520-2ef5-5531-89c1-acc841f6b842",
+      "name": "Upload Allowed?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        1580,
+        -120
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "de8d550e-5760-5cb3-b759-00960626af63",
+              "leftValue": "={{ !($('When Called by Another Workflow').first().json.validate_only === true) }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "e95d31fb-7aef-5c55-b9f1-3c9fe7db6d09",
+      "name": "Open Upload Session",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        1820,
+        20
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://www.googleapis.com/upload/youtube/v3/videos?uploadType=resumable&part=snippet,status",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "youTubeOAuth2Api",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-Upload-Content-Type",
+              "value": "video/mp4"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ JSON.stringify({ snippet: { title: $json.title, description: $json.description, tags: $json.tags || [], categoryId: '28' }, status: { privacyStatus: $json.privacyStatus, selfDeclaredMadeForKids: false } }) }}",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true
+            }
+          },
+          "timeout": 60000
+        }
+      },
+      "credentials": {
+        "youTubeOAuth2Api": {
+          "id": "youTubeOAuth2Api",
+          "name": "YouTube account"
+        }
+      },
+      "onError": "continueRegularOutput"
     },
     {
       "id": "91cae1ab-bd6a-5899-819f-292f108a4d88",
@@ -236,8 +314,53 @@
         -120
       ],
       "parameters": {
-        "jsCode": "const prepared = $('Prepare Shorts Job').first().json;\nif (prepared.skip_upload) {\n  return [{ json: {\n    product_id: prepared.product_id,\n    platform: 'youtube',\n    status: 'skipped',\n    skipped: true,\n    reason: prepared.reason || 'YouTube Shorts require video media'\n  } }];\n}\nif (!prepared.local_path) {\n  return [{ json: {\n    product_id: prepared.product_id,\n    platform: 'youtube',\n    status: 'failed',\n    error_message: 'Missing local_path for Shorts video binary (product media from Drive).'\n  } }];\n}\nconst response = $json;\nconst errMsg = (response.error && response.error.message) || response.message || '';\nconst postId = response.id || response.videoId || response.uploadId || null;\nif (response.error || !postId) {\n  let message = errMsg || JSON.stringify(response).slice(0, 500);\n  const lower = String(message).toLowerCase();\n  if (lower.includes('invalid_grant') || lower.includes('unauthorized') || lower.includes('login required')) {\n    message = 'YouTube OAuth is missing or expired. Open n8n \u2192 Credentials \u2192 YouTube account \u2192 Sign in with Google. ' + message;\n  } else if (lower.includes('quota')) {\n    message = 'YouTube API quota exceeded. Retry tomorrow or request quota increase. ' + message;\n  } else if (lower.includes('youtubesignuprequired') || lower.includes('channel not found')) {\n    message = 'YouTube channel may be missing on this Google account. ' + message;\n  }\n  return [{ json: {\n    product_id: prepared.product_id,\n    platform: 'youtube',\n    status: 'failed',\n    error_message: message,\n    shorts: true\n  } }];\n}\nreturn [{ json: {\n  product_id: prepared.product_id,\n  platform: 'youtube',\n  status: 'published',\n  post_id: String(postId),\n  shorts: true\n} }];\n"
+        "jsCode": "const validateOnly = $('When Called by Another Workflow').first().json.validate_only === true;\n\nconst prepared = $('Prepare Shorts Job').first().json;\nif (validateOnly && !prepared.skip_upload) {\n  const session = $json;\n  const headers = session.headers || {};\n  const location = headers.location || headers.Location || '';\n  const ok = Number(session.statusCode) === 200 && String(location).includes('upload_id=');\n  const err = session.error ? String(session.error.message || JSON.stringify(session.error)).slice(0, 400) : ('upload session HTTP ' + session.statusCode);\n  if (!ok) return [{ json: { product_id: prepared.product_id, platform: 'youtube', status: 'failed', error_message: 'YouTube upload session rejected: ' + err } }];\n  return [{ json: { product_id: prepared.product_id, platform: 'youtube', status: 'validated', validate_only: true, shorts: true, privacy_status: prepared.privacyStatus, title: prepared.title, has_local_file: Boolean(prepared.local_path), note: 'resumable session opened; no bytes sent, no video created' } }];\n}\nif (prepared.skip_upload) {\n  return [{ json: {\n    product_id: prepared.product_id,\n    platform: 'youtube',\n    status: 'skipped',\n    skipped: true,\n    reason: prepared.reason || 'YouTube Shorts require video media'\n  } }];\n}\nif (!prepared.local_path) {\n  return [{ json: {\n    product_id: prepared.product_id,\n    platform: 'youtube',\n    status: 'failed',\n    error_message: 'Missing local_path for Shorts video binary (product media from Drive).'\n  } }];\n}\nconst response = $json;\nconst errMsg = (response.error && response.error.message) || response.message || '';\nconst postId = response.id || response.videoId || response.uploadId || null;\nif (response.error || !postId) {\n  let message = errMsg || JSON.stringify(response).slice(0, 500);\n  const lower = String(message).toLowerCase();\n  if (lower.includes('invalid_grant') || lower.includes('unauthorized') || lower.includes('login required')) {\n    message = 'YouTube OAuth is missing or expired. Open n8n \u2192 Credentials \u2192 YouTube account \u2192 Sign in with Google. ' + message;\n  } else if (lower.includes('quota')) {\n    message = 'YouTube API quota exceeded. Retry tomorrow or request quota increase. ' + message;\n  } else if (lower.includes('youtubesignuprequired') || lower.includes('channel not found')) {\n    message = 'YouTube channel may be missing on this Google account. ' + message;\n  }\n  return [{ json: {\n    product_id: prepared.product_id,\n    platform: 'youtube',\n    status: 'failed',\n    error_message: message,\n    shorts: true\n  } }];\n}\nreturn [{ json: {\n  product_id: prepared.product_id,\n  platform: 'youtube',\n  status: 'published',\n  post_id: String(postId),\n  shorts: true\n} }];\n"
       }
+    },
+    {
+      "id": "f304fbfc-edb0-5d32-aa5c-f9dd5acbc4a7",
+      "name": "Record Result?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        2300,
+        -120
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "7b5fd73c-b88a-5dc7-bde8-aef1fc6ea989",
+              "leftValue": "={{ !($('When Called by Another Workflow').first().json.validate_only === true) }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "897cd8b7-1dfe-5b17-ba12-4224b81924f9",
+      "name": "Validation Result",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        2420,
+        -260
+      ],
+      "parameters": {}
     },
     {
       "id": "2378f599-467c-512c-9bf7-4587043282b3",
@@ -338,11 +461,40 @@
       "main": [
         [
           {
+            "node": "Upload Allowed?",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Interpret Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Upload Allowed?": {
+      "main": [
+        [
+          {
             "node": "Read Short Binary",
             "type": "main",
             "index": 0
           }
         ],
+        [
+          {
+            "node": "Open Upload Session",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Open Upload Session": {
+      "main": [
         [
           {
             "node": "Interpret Result",
@@ -378,7 +530,25 @@
       "main": [
         [
           {
+            "node": "Record Result?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Record Result?": {
+      "main": [
+        [
+          {
             "node": "Store Platform Result",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Validation Result",
             "type": "main",
             "index": 0
           }

@@ -179,6 +179,8 @@ def validate(strict: bool, expect_live: bool | None, preflight: bool = False, de
     add("Instagram account id configured", bool(cfg.get("instagram_business_account_id")), f"{cfg.get('instagram_business_account_id')}")
     add("AI: Gemini primary + Groq fallback", cfg.get("ai_provider") == "gemini" and cfg.get("ai_fallback_provider") == "groq", f"{cfg.get('ai_provider')}/{cfg.get('ai_fallback_provider')}")
     add("YouTube format is Shorts", cfg.get("youtube_format") == "shorts", f"{cfg.get('youtube_format')} privacy={cfg.get('youtube_privacy_status')}")
+    add("YouTube Shorts are public", cfg.get("youtube_privacy_status") == "public", f"privacy={cfg.get('youtube_privacy_status')}")
+    add("Pinterest board configured", bool(cfg.get("pinterest_board_id")), f"board={cfg.get('pinterest_board_id')}")
 
     status, run = stack.run(PROBES["meta"], timeout=180)
     meta = node_json(run, "Summarize Probe")
@@ -262,6 +264,17 @@ def validate(strict: bool, expect_live: bool | None, preflight: bool = False, de
             status == "success" and path.get("instagram_ok") and path.get("facebook_ok"),
             f"product={path.get('product_id')} media_ok={path.get('media_ok')} media_error={path.get('media_error')} ig={ig.get('status')}/{ig.get('status_code')} ig_error={ig.get('error')} "
             f"fb={fb.get('status')} page={fb.get('page_id')} ({fb.get('page_name')}) fb_error={fb.get('error')} exec={status}",
+        )
+        pin, yt = path.get("pinterest") or {}, path.get("youtube") or {}
+        add(
+            "Publish path (no posting): Pinterest video uploaded + processed for a Video Pin",
+            status == "success" and bool(path.get("pinterest_ok")),
+            f"pin={pin.get('status')} video={pin.get('is_video')} board={pin.get('board_id')} media={pin.get('media_id')}/{pin.get('media_status')} pin_error={pin.get('error')}",
+        )
+        add(
+            "Publish path (no posting): YouTube Shorts upload session accepted",
+            status == "success" and bool(path.get("youtube_ok")),
+            f"yt={yt.get('status')} privacy={yt.get('privacy_status')} shorts={yt.get('shorts')} yt_error={yt.get('error')}",
         )
 
     ok = all(c["ok"] for c in checks if c["blocking"])

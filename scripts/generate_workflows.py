@@ -1204,25 +1204,212 @@ return [{ json: { ...base, status: 'published', post_id: postId, owner_verified:
     return workflow("05 Facebook Publisher", WF["facebook"], nodes, pairs)
 
 
+def pinterest_http(wf: str, name: str, method: str, url: str, pos: list[int], json_body: str | None = None) -> dict:
+    params: dict = {"method": method, "url": url, "authentication": "genericCredentialType", "genericAuthType": "oAuth2Api", "options": {"timeout": 120000}}
+    if json_body is not None:
+        params.update({"sendBody": True, "contentType": "raw", "rawContentType": "application/json", "body": json_body})
+    return node(wf, name, "n8n-nodes-base.httpRequest", 4.5, params, pos, credentials=dict(PINTEREST_CRED), onError="continueRegularOutput")
+
+
+PIN_ERR_JS = "const errText = (r) => r && (r.error || (r.code && r.message)) ? String((r.error && (r.error.description || r.error.message)) || r.message || JSON.stringify(r.error)).slice(0, 400) : null;\n"
+
+
 def pinterest_workflow() -> dict:
+    wf = "pinterest"
+    job = "$('Prepare Pin Job').first().json"
     note = """## Pinterest (official API v5)
 
-Creates **image Pins** only, using `media_source.source_type = image_url` or `image_base64`.
+**Video products → Video Pins** on `PINTEREST_BOARD_ID`:
+1. `POST /v5/media` (media_type video)
+2. tracking-api uploads the local file to the returned S3 form
+3. Poll `GET /v5/media/{id}` until `succeeded`
+4. `POST /v5/pins` with `media_source.source_type = video_id`
 
-Video products are skipped on purpose. Do not assume video Pin upload works without the media-upload dance.
+Image products → image Pins (`image_url`).
 
-Set `PINTEREST_BOARD_ID` and attach **Pinterest account** (OAuth2 API) to the HTTP node.
-Keep `DRY_RUN=true` — Duplicate Check blocks Pin create.
+`validate_only` runs stop before Create Pin and record nothing. `DRY_RUN=true` stops at Duplicate Check.
 """
-    url = "https://api.pinterest.com/v5/pins"
-    body = "={{ JSON.stringify({ board_id: $json.config.pinterest_board_id, title: $json.content.pinterest.title, description: $json.content.pinterest.description, alt_text: $json.content.pinterest.title, media_source: { source_type: 'image_url', url: $json.public_media_url } }) }}"
-    wf = platform_workflow("pinterest", WF["pinterest"], "06 Pinterest Publisher", note, url, body, "$('When Called by Another Workflow').first().json.media_type === 'video'")
-    for n in wf["nodes"]:
-        if n["name"] == "Publish Official API":
-            n["parameters"]["authentication"] = "genericCredentialType"
-            n["parameters"]["genericAuthType"] = "oAuth2Api"
-            n["credentials"] = dict(PINTEREST_CRED)
-    return wf
+    prepare_js = """
+const job = $('When Called by Another Workflow').first().json;
+const config = $('Load Config').first().json;
+const loaded = $('Load Preview').first().json;
+const preview = loaded && !loaded.error ? loaded : {};
+const content = preview.content || job.content || {};
+const p = content.pinterest || {};
+const filename = String(preview.filename || job.filename || '');
+const isVideo = String(preview.media_type || job.media_type || '') === 'video' || /\\.(mp4|mov)$/i.test(filename);
+const driveId = preview.drive_file_id || job.drive_file_id || null;
+const tags = (p.hashtags || []).join(' ');
+let description = [p.description, tags].filter(Boolean).join('\\n\\n');
+if (description.length > 800) description = description.slice(0, 797) + '...';
+let error = null;
+if (!config.pinterest_board_id) error = 'PINTEREST_BOARD_ID is missing';
+else if (!p.title && !p.description) error = 'No saved Pinterest content for Product ' + job.product_id;
+else if (!filename) error = 'No media filename for Product ' + job.product_id;
+else if (!isVideo && !driveId) error = 'No Drive file id for image Product ' + job.product_id;
+return [{ json: {
+  product_id: job.product_id,
+  platform: 'pinterest',
+  board_id: String(config.pinterest_board_id || ''),
+  is_video: isVideo,
+  filename: String(preview.local_path || job.local_path || filename).split(/[\\\\/]/).pop(),
+  image_url: driveId ? ('https://drive.google.com/uc?export=download&id=' + driveId) : null,
+  title: String(p.title || '').slice(0, 100),
+  description,
+  alt_text: String(p.title || preview.vision_notes || '').slice(0, 500),
+  error
+} }];
+"""
+    pin_body = "{ board_id: " + job + ".board_id, title: " + job + ".title, description: " + job + ".description, alt_text: " + job + ".alt_text, "
+    nodes = [
+        sticky(wf, "Note", note, [-380, -300], 380, 320, 4),
+        trigger_sub(wf, [0, 0]),
+        http_get(wf, "Duplicate Check", "={{ '" + TRACKING + "/products/' + $json.product_id + '/can-publish?platform=pinterest' }}", [240, 0]),
+        iff(wf, "Allowed to Publish?", "={{ $json.allowed || " + VALIDATE_ONLY + " }}", TRUE, True, [480, 0]),
+        code(
+            wf,
+            "Blocked Result",
+            """
+const job = $('When Called by Another Workflow').first().json;
+const check = $json;
+return [{ json: {
+  product_id: job.product_id,
+  platform: 'pinterest',
+  status: check.dry_run ? 'dry_run_skipped' : (check.status === 'published' ? 'published' : 'skipped'),
+  skipped: true,
+  reason: check.reason,
+  post_id: check.post_id || null
+} }];
+""",
+            [720, 260],
+        ),
+        http_get(wf, "Load Config", f"{TRACKING}/config", [720, -120]),
+        http_get(wf, "Load Preview", "={{ '" + TRACKING + "/previews/' + $('When Called by Another Workflow').first().json.product_id }}", [920, -120], onError="continueRegularOutput"),
+        code(wf, "Prepare Pin Job", prepare_js, [1120, -120]),
+        iff(wf, "Job Ready?", "={{ !$json.error }}", TRUE, True, [1320, -120]),
+        iff(wf, "Is Video?", "={{ $json.is_video }}", TRUE, True, [1520, -120]),
+        pinterest_http(wf, "Register Media", "POST", "https://api.pinterest.com/v5/media", [1720, -240], "={{ JSON.stringify({ media_type: 'video' }) }}"),
+        http_post_json_object(
+            wf,
+            "S3 Upload",
+            f"{TRACKING}/pinterest/s3-upload",
+            "{ upload_url: $json.upload_url, upload_parameters: $json.upload_parameters, name: " + job + ".filename }",
+            [1920, -240],
+            onError="continueRegularOutput",
+        ),
+        pinterest_http(wf, "Check Media", "GET", "={{ 'https://api.pinterest.com/v5/media/' + $('Register Media').first().json.media_id }}", [2120, -240]),
+        code(
+            wf,
+            "Media Gate",
+            PIN_ERR_JS
+            + """
+const reg = $('Register Media').first().json;
+const up = $('S3 Upload').first().json;
+const media = $json;
+const attempt = $runIndex;
+const firstErr = errText(reg) || (reg.media_id ? null : 'Register media returned no media_id: ' + JSON.stringify(reg).slice(0, 300))
+  || (up.ok ? null : 'S3 upload failed: ' + (up.error || up.status))
+  || errText(media);
+if (firstErr) return [{ json: { state: 'fail', error: firstErr } }];
+const status = String(media.status || '');
+if (status === 'succeeded') return [{ json: { state: 'ready', attempt } }];
+if (status === 'failed') return [{ json: { state: 'fail', error: 'Pinterest video processing failed' } }];
+if (attempt >= 30) return [{ json: { state: 'fail', error: 'Pinterest processing timed out (' + status + ')' } }];
+return [{ json: { state: 'wait', attempt, status } }];
+""",
+            [2320, -240],
+        ),
+        iff(wf, "Media Ready?", "={{ $json.state }}", EQ_STR, "ready", [2520, -240]),
+        iff(wf, "Keep Waiting?", "={{ $json.state }}", EQ_STR, "wait", [2520, -40]),
+        node(wf, "Wait", "n8n-nodes-base.wait", 1.1, {"resume": "timeInterval", "amount": 10, "unit": "seconds"}, [2720, 40]),
+        iff(wf, "Video Pin Allowed?", "={{ !" + VALIDATE_ONLY + " }}", TRUE, True, [2720, -360]),
+        pinterest_http(
+            wf,
+            "Create Video Pin",
+            "POST",
+            "https://api.pinterest.com/v5/pins",
+            [2920, -420],
+            "={{ JSON.stringify(" + pin_body + "media_source: { source_type: 'video_id', media_id: $('Register Media').first().json.media_id, cover_image_key_frame_time: 1 } }) }}",
+        ),
+        iff(wf, "Image Pin Allowed?", "={{ !" + VALIDATE_ONLY + " }}", TRUE, True, [1720, 60]),
+        pinterest_http(
+            wf,
+            "Create Image Pin",
+            "POST",
+            "https://api.pinterest.com/v5/pins",
+            [1920, 60],
+            "={{ JSON.stringify(" + pin_body + "media_source: { source_type: 'image_url', url: " + job + ".image_url } }) }}",
+        ),
+        code(
+            wf,
+            "Interpret Result",
+            PIN_ERR_JS
+            + META_GET_JS
+            + VALIDATE_JS
+            + """
+const prep = get('Prepare Pin Job') || {};
+const base = { product_id: prep.product_id || $('When Called by Another Workflow').first().json.product_id, platform: 'pinterest' };
+const fail = (msg) => [{ json: { ...base, status: 'failed', error_message: String(msg || 'unknown error').slice(0, 500) } }];
+if (prep.error) return fail(prep.error);
+if (prep.is_video) {
+  const gate = get('Media Gate') || {};
+  if (gate.state !== 'ready') return fail(gate.error || 'Pinterest video media was not processed');
+  const mediaId = String((get('Register Media') || {}).media_id || '');
+  if (validateOnly) return [{ json: { ...base, status: 'validated', validate_only: true, is_video: true, board_id: prep.board_id, media_id: mediaId, media_status: 'succeeded', note: 'video uploaded and processed; no Pin created' } }];
+  const pin = get('Create Video Pin');
+  if (!pin || errText(pin) || !pin.id) return fail(errText(pin) || ('Create Pin returned no id: ' + JSON.stringify(pin).slice(0, 300)));
+  return [{ json: { ...base, status: 'published', post_id: String(pin.id), url: 'https://www.pinterest.com/pin/' + pin.id + '/' } }];
+}
+if (validateOnly) return [{ json: { ...base, status: 'validated', validate_only: true, is_video: false, board_id: prep.board_id, note: 'image Pin job ready; no Pin created' } }];
+const pin = get('Create Image Pin');
+if (!pin || errText(pin) || !pin.id) return fail(errText(pin) || ('Create Pin returned no id: ' + JSON.stringify(pin).slice(0, 300)));
+return [{ json: { ...base, status: 'published', post_id: String(pin.id), url: 'https://www.pinterest.com/pin/' + pin.id + '/' } }];
+""",
+            [3140, -120],
+        ),
+        iff(wf, "Record Result?", "={{ !" + VALIDATE_ONLY + " }}", TRUE, True, [3340, -120]),
+        noop(wf, "Validation Result", [3540, -260]),
+        http_post_json(
+            wf,
+            "Store Platform Result",
+            "={{ '" + TRACKING + "/products/' + $json.product_id + '/platform-result' }}",
+            "={{ JSON.stringify({ platform: 'pinterest', status: $json.status === 'dry_run_skipped' ? 'pending' : ($json.status === 'skipped' ? 'skipped' : $json.status), post_id: $json.post_id || null, error_message: $json.error_message || $json.reason || null }) }}",
+            [3540, 40],
+        ),
+    ]
+    pairs = [
+        ("When Called by Another Workflow", "Duplicate Check"),
+        ("Duplicate Check", "Allowed to Publish?"),
+        ("Allowed to Publish?", "Load Config", 0),
+        ("Allowed to Publish?", "Blocked Result", 1),
+        ("Load Config", "Load Preview"),
+        ("Load Preview", "Prepare Pin Job"),
+        ("Prepare Pin Job", "Job Ready?"),
+        ("Job Ready?", "Is Video?", 0),
+        ("Job Ready?", "Interpret Result", 1),
+        ("Is Video?", "Register Media", 0),
+        ("Is Video?", "Image Pin Allowed?", 1),
+        ("Register Media", "S3 Upload"),
+        ("S3 Upload", "Check Media"),
+        ("Check Media", "Media Gate"),
+        ("Media Gate", "Media Ready?"),
+        ("Media Ready?", "Video Pin Allowed?", 0),
+        ("Media Ready?", "Keep Waiting?", 1),
+        ("Keep Waiting?", "Wait", 0),
+        ("Keep Waiting?", "Interpret Result", 1),
+        ("Wait", "Check Media"),
+        ("Video Pin Allowed?", "Create Video Pin", 0),
+        ("Video Pin Allowed?", "Interpret Result", 1),
+        ("Create Video Pin", "Interpret Result"),
+        ("Image Pin Allowed?", "Create Image Pin", 0),
+        ("Image Pin Allowed?", "Interpret Result", 1),
+        ("Create Image Pin", "Interpret Result"),
+        ("Interpret Result", "Record Result?"),
+        ("Record Result?", "Store Platform Result", 0),
+        ("Record Result?", "Validation Result", 1),
+        ("Blocked Result", "Store Platform Result"),
+    ]
+    return workflow("06 Pinterest Publisher", WF["pinterest"], nodes, pairs)
 
 
 def youtube_workflow() -> dict:
@@ -1232,10 +1419,12 @@ This automation publishes **YouTube Shorts only** — never long-form videos.
 
 - Video products from Google Drive are treated as Shorts.
 - Image-only products are skipped.
-- Default privacy is **private** for testing (`YOUTUBE_PRIVACY_STATUS=private`).
+- Privacy comes from `YOUTUBE_PRIVACY_STATUS` (production: **public**).
 - Description/hashtags include `#Shorts` for Shorts discovery.
 - Attach **YouTube OAuth2 API** credentials before any live run.
 - `DRY_RUN=true` stops at Duplicate Check — nothing is uploaded.
+- `validate_only` opens a resumable upload session with the real metadata, never sends the
+  video bytes (an unfinished session creates no video) and records nothing.
 """
     nodes = [
         sticky("youtube", "Note", note, [-380, -260], 380, 360, 4),
@@ -1246,7 +1435,7 @@ This automation publishes **YouTube Shorts only** — never long-form videos.
             "={{ '" + TRACKING + "/products/' + $json.product_id + '/can-publish?platform=youtube' }}",
             [240, 0],
         ),
-        iff("youtube", "Allowed to Publish?", "={{ $json.allowed }}", TRUE, True, [500, 0]),
+        iff("youtube", "Allowed to Publish?", "={{ $json.allowed || " + VALIDATE_ONLY + " }}", TRUE, True, [500, 0]),
         code(
             "youtube",
             "Blocked Result",
@@ -1316,7 +1505,7 @@ return [{ json: {
   description,
   tags,
   hashtags,
-  privacyStatus: config.youtube_privacy_status || 'private',
+  privacyStatus: config.youtube_privacy_status || 'public',
   filename: preview.filename || job.filename || null,
   drive_file_id: preview.drive_file_id || job.drive_file_id || null,
   local_path: job.local_path || preview.local_path || null,
@@ -1326,6 +1515,29 @@ return [{ json: {
             [1220, -120],
         ),
         iff("youtube", "Upload Short?", "={{ !$json.skip_upload }}", TRUE, True, [1460, -120]),
+        iff("youtube", "Upload Allowed?", "={{ !" + VALIDATE_ONLY + " }}", TRUE, True, [1580, -120]),
+        node(
+            "youtube",
+            "Open Upload Session",
+            "n8n-nodes-base.httpRequest",
+            4.5,
+            {
+                "method": "POST",
+                "url": "https://www.googleapis.com/upload/youtube/v3/videos?uploadType=resumable&part=snippet,status",
+                "authentication": "predefinedCredentialType",
+                "nodeCredentialType": "youTubeOAuth2Api",
+                "sendHeaders": True,
+                "headerParameters": {"parameters": [{"name": "X-Upload-Content-Type", "value": "video/mp4"}]},
+                "sendBody": True,
+                "contentType": "raw",
+                "rawContentType": "application/json",
+                "body": "={{ JSON.stringify({ snippet: { title: $json.title, description: $json.description, tags: $json.tags || [], categoryId: '28' }, status: { privacyStatus: $json.privacyStatus, selfDeclaredMadeForKids: false } }) }}",
+                "options": {"response": {"response": {"fullResponse": True}}, "timeout": 60000},
+            },
+            [1820, 20],
+            credentials={"youTubeOAuth2Api": {"id": "youTubeOAuth2Api", "name": "YouTube account"}},
+            onError="continueRegularOutput",
+        ),
         read_local_file("youtube", "Read Short Binary", "={{ $json.local_path }}", [1700, -200]),
         node(
             "youtube",
@@ -1352,8 +1564,18 @@ return [{ json: {
         code(
             "youtube",
             "Interpret Result",
-            """
+            VALIDATE_JS
+            + """
 const prepared = $('Prepare Shorts Job').first().json;
+if (validateOnly && !prepared.skip_upload) {
+  const session = $json;
+  const headers = session.headers || {};
+  const location = headers.location || headers.Location || '';
+  const ok = Number(session.statusCode) === 200 && String(location).includes('upload_id=');
+  const err = session.error ? String(session.error.message || JSON.stringify(session.error)).slice(0, 400) : ('upload session HTTP ' + session.statusCode);
+  if (!ok) return [{ json: { product_id: prepared.product_id, platform: 'youtube', status: 'failed', error_message: 'YouTube upload session rejected: ' + err } }];
+  return [{ json: { product_id: prepared.product_id, platform: 'youtube', status: 'validated', validate_only: true, shorts: true, privacy_status: prepared.privacyStatus, title: prepared.title, has_local_file: Boolean(prepared.local_path), note: 'resumable session opened; no bytes sent, no video created' } }];
+}
 if (prepared.skip_upload) {
   return [{ json: {
     product_id: prepared.product_id,
@@ -1402,6 +1624,8 @@ return [{ json: {
 """,
             [2180, -120],
         ),
+        iff("youtube", "Record Result?", "={{ !" + VALIDATE_ONLY + " }}", TRUE, True, [2300, -120]),
+        noop("youtube", "Validation Result", [2420, -260]),
         http_post_json(
             "youtube",
             "Store Platform Result",
@@ -1418,11 +1642,16 @@ return [{ json: {
         ("Load Config", "Load Preview"),
         ("Load Preview", "Prepare Shorts Job"),
         ("Prepare Shorts Job", "Upload Short?"),
-        ("Upload Short?", "Read Short Binary", 0),
+        ("Upload Short?", "Upload Allowed?", 0),
         ("Upload Short?", "Interpret Result", 1),
+        ("Upload Allowed?", "Read Short Binary", 0),
+        ("Upload Allowed?", "Open Upload Session", 1),
+        ("Open Upload Session", "Interpret Result"),
         ("Read Short Binary", "Upload YouTube Short"),
         ("Upload YouTube Short", "Interpret Result"),
-        ("Interpret Result", "Store Platform Result"),
+        ("Interpret Result", "Record Result?"),
+        ("Record Result?", "Store Platform Result", 0),
+        ("Record Result?", "Validation Result", 1),
         ("Blocked Result", "Store Platform Result"),
     ]
     return workflow("07 YouTube Shorts Publisher", WF["youtube"], nodes, pairs)
@@ -1437,6 +1666,8 @@ def publish_path_check_workflow() -> dict:
 Calls **04 Instagram Publisher** and **05 Facebook Publisher** for the queue head with `validate_only: true`.
 Instagram: container + resumable upload + wait for FINISHED, **no media_publish** (the container expires unused).
 Facebook: Page token guard + Reel upload session, **never finished** (nothing is published).
+Pinterest: video uploaded to Pinterest media + processed, **no Pin created**.
+YouTube: resumable upload session opened with public Shorts metadata, **no bytes sent** (no video).
 No platform results are recorded.
 """
     nodes = [
@@ -1465,13 +1696,20 @@ return [{ json: { product_id: head.product_id, filename: head.filename, validate
         execute_sub(wf, "Check Instagram Path", WF["instagram"], "04 Instagram Publisher", [760, 0], continue_on_error=True),
         code(wf, "Keep Job", "return [{ json: { ...$('Pick Queue Head').first().json, media: $('Ensure Media').first().json, instagram: $json } }];", [880, 0]),
         execute_sub(wf, "Check Facebook Path", WF["facebook"], "05 Facebook Publisher", [1100, 0], continue_on_error=True),
+        code(wf, "Pinterest Head", "return [{ json: $('Pick Queue Head').first().json }];", [1220, 160]),
+        execute_sub(wf, "Check Pinterest Path", WF["pinterest"], "06 Pinterest Publisher", [1340, 0], continue_on_error=True),
+        code(wf, "YouTube Head", "return [{ json: $('Pick Queue Head').first().json }];", [1460, 160]),
+        execute_sub(wf, "Check YouTube Path", WF["youtube"], "07 YouTube Shorts Publisher", [1580, 0], continue_on_error=True),
         code(
             wf,
             "Summarize Check",
-            """
+            META_GET_JS
+            + """
 const job = $('Keep Job').first().json;
 const ig = job.instagram || {};
-const fb = $json || {};
+const fb = get('Check Facebook Path') || {};
+const pin = get('Check Pinterest Path') || {};
+const yt = get('Check YouTube Path') || {};
 const ok = (r) => r.status === 'validated' && r.validate_only === true;
 return [{ json: {
   product_id: job.product_id,
@@ -1480,12 +1718,16 @@ return [{ json: {
   media_error: (job.media && job.media.error) || null,
   instagram_ok: ok(ig),
   facebook_ok: ok(fb),
+  pinterest_ok: ok(pin),
+  youtube_ok: ok(yt),
   instagram: { status: ig.status, container_id: ig.container_id || null, status_code: ig.status_code || null, error: ig.error_message || ig.error || null },
   facebook: { status: fb.status, page_id: fb.page_id || null, page_name: fb.page_name || null, upload_session: fb.upload_session || null, error: fb.error_message || fb.error || null },
+  pinterest: { status: pin.status, is_video: pin.is_video === true, board_id: pin.board_id || null, media_id: pin.media_id || null, media_status: pin.media_status || null, error: pin.error_message || pin.error || null },
+  youtube: { status: yt.status, privacy_status: yt.privacy_status || null, shorts: yt.shorts === true, error: yt.error_message || yt.error || null },
   published_anything: false
 } }];
 """,
-            [1320, 0],
+            [1800, 0],
         ),
     ]
     pairs = [
@@ -1496,7 +1738,11 @@ return [{ json: {
         ("Head Job", "Check Instagram Path"),
         ("Check Instagram Path", "Keep Job"),
         ("Keep Job", "Check Facebook Path"),
-        ("Check Facebook Path", "Summarize Check"),
+        ("Check Facebook Path", "Pinterest Head"),
+        ("Pinterest Head", "Check Pinterest Path"),
+        ("Check Pinterest Path", "YouTube Head"),
+        ("YouTube Head", "Check YouTube Path"),
+        ("Check YouTube Path", "Summarize Check"),
     ]
     return workflow("17 Publish Path Check", WF["path_check"], nodes, pairs)
 
@@ -1826,7 +2072,9 @@ return [{{ json: {{ ...src, logBody }} }}];
         ),
         execute_sub("daily", "Publish Instagram", WF["instagram"], "04 Instagram Publisher", [3160, 280], continue_on_error=True),
         execute_sub("daily", "Publish Facebook", WF["facebook"], "05 Facebook Publisher", [3400, 280], continue_on_error=True),
+        code("daily", "Pinterest Job", "return [{ json: $('Publish Payload').first().json }];", [3520, 400]),
         execute_sub("daily", "Publish Pinterest", WF["pinterest"], "06 Pinterest Publisher", [3640, 280], continue_on_error=True),
+        code("daily", "YouTube Job", "return [{ json: $('Publish Payload').first().json }];", [3760, 400]),
         execute_sub("daily", "Publish YouTube", WF["youtube"], "07 YouTube Shorts Publisher", [3880, 280], continue_on_error=True),
         http_post_json(
             "daily",
@@ -1867,8 +2115,10 @@ return [{{ json: {{ ...src, logBody }} }}];
         ("Build Dry Run Log", "Log Dry Run Preview"),
         ("Log Dry Run Preview", "Finalize Dry Run"),
         ("Publish Instagram", "Publish Facebook"),
-        ("Publish Facebook", "Publish Pinterest"),
-        ("Publish Pinterest", "Publish YouTube"),
+        ("Publish Facebook", "Pinterest Job"),
+        ("Pinterest Job", "Publish Pinterest"),
+        ("Publish Pinterest", "YouTube Job"),
+        ("YouTube Job", "Publish YouTube"),
         ("Publish YouTube", "Finalize Product"),
         ("Finalize Product", "Log Final Status"),
     ]
