@@ -521,7 +521,21 @@ def test_meta_token() -> None:
     check("meta token: no debug data fails closed", not any(v for k, v in result({}).items() if not k.endswith("advisory") and k != "token"))
 
 
+def test_disabled_platforms() -> None:
+    os.environ.pop("DISABLED_PLATFORMS", None)
+    check("config: Pinterest and YouTube automation turned off", S.disabled_platforms() == ["pinterest", "youtube"], S.disabled_platforms())
+    check("only Instagram + Facebook are required while they are off", S.required_platforms("video") == ["instagram", "facebook"] and S.required_platforms("image") == ["instagram", "facebook"])
+    os.environ["DRY_RUN"] = "false"
+    for platform in ("pinterest", "youtube"):
+        r = S.can_publish(905, platform)
+        check(f"live: {platform} publish is blocked while turned off", r["allowed"] is False and r.get("disabled") is True, r)
+    check("live: Instagram/Facebook unaffected by the switch", S.can_publish(901, "instagram")["allowed"] is True)
+    os.environ["DRY_RUN"] = "true"
+    check("runtime config exposes the switch to n8n", S.runtime_config()["disabled_platforms"] == ["pinterest", "youtube"])
+
+
 def test_video_platforms() -> None:
+    os.environ["DISABLED_PLATFORMS"] = ""
     check("video: Pinterest is no longer skipped (Video Pins)", "pinterest" not in S.skipped_platforms("video"), S.skipped_platforms("video"))
     check("image: YouTube is still skipped", "youtube" in S.skipped_platforms("image"))
     check("video requires Instagram, Facebook and YouTube; Pinterest is best-effort", S.required_platforms("video") == ["instagram", "facebook", "youtube"], S.required_platforms("video"))
@@ -555,11 +569,12 @@ def test_video_platforms() -> None:
     os.environ["DRY_RUN"] = "false"
     check("failed Pinterest is still attempted on the next post (best-effort, not skipped)", S.can_publish(905, "pinterest")["allowed"] is True)
     os.environ["DRY_RUN"] = "true"
+    os.environ.pop("DISABLED_PLATFORMS", None)
 
 
 def main() -> int:
     try:
-        for test in (test_schedule, test_schedule_save_rules, test_github_sync, test_queue_dry_run, test_queue_live, test_persistence, test_scheduler, test_http, test_gate, test_meta_token, test_video_platforms):
+        for test in (test_schedule, test_schedule_save_rules, test_github_sync, test_queue_dry_run, test_queue_live, test_persistence, test_scheduler, test_http, test_gate, test_meta_token, test_video_platforms, test_disabled_platforms):
             print(f"\n== {test.__name__} ==")
             test()
     finally:

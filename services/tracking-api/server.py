@@ -303,6 +303,7 @@ def runtime_config() -> dict[str, Any]:
         "pinterest_board_id": os.environ.get("PINTEREST_BOARD_ID", ""),
         "youtube_privacy_status": os.environ.get("YOUTUBE_PRIVACY_STATUS", settings.get("youtube_privacy_status", "public")),
         "youtube_format": settings.get("youtube_format", "shorts"),
+        "disabled_platforms": disabled_platforms(settings),
         "youtube_oauth_redirect_uri": "http://localhost:5678/rest/oauth2-credential/callback",
         "website_url": os.environ.get("WEBSITE_URL", "") or settings.get("website_url", ""),
         "include_website_url": include_url or bool(settings.get("include_website_url")),
@@ -366,10 +367,17 @@ def parse_files(files: list[dict[str, Any]]) -> dict[int, dict[str, Any]]:
     return {"products": grouped, "ignored": [name for name in ignored if name]}
 
 
+def disabled_platforms(settings: dict[str, Any] | None = None) -> list[str]:
+    raw = os.environ.get("DISABLED_PLATFORMS")
+    names = raw.split(",") if raw is not None else (settings or load_settings_file()).get("disabled_platforms", [])
+    return [p for p in (str(n).strip().lower() for n in names) if p in PLATFORM_COLUMNS]
+
+
 def required_platforms(media_type: str, settings: dict[str, Any] | None = None) -> list[str]:
     settings = settings or load_settings_file()
     mapping = settings.get("required_platforms", {})
-    return list(mapping.get(media_type, ["instagram", "facebook"]))
+    disabled = set(disabled_platforms(settings))
+    return [p for p in mapping.get(media_type, ["instagram", "facebook"]) if p not in disabled]
 
 
 def skipped_platforms(media_type: str) -> dict[str, str]:
@@ -897,6 +905,8 @@ def can_publish(product_id: int, platform: str) -> dict[str, Any]:
     platform = platform.lower()
     if platform not in PLATFORM_COLUMNS:
         return {"allowed": False, "reason": f"Unknown platform {platform}"}
+    if platform in disabled_platforms():
+        return {"allowed": False, "disabled": True, "reason": f"{platform} automation is turned off (disabled_platforms)."}
     with connect() as conn:
         row = conn.execute("SELECT * FROM products WHERE product_id = ?", (product_id,)).fetchone()
         if row is None:

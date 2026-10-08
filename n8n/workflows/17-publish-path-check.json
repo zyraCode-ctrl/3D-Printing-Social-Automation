@@ -154,6 +154,91 @@
       "onError": "continueRegularOutput"
     },
     {
+      "id": "8b0469aa-f760-57e0-a4a3-266c24c12336",
+      "name": "Load Config",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        1160,
+        -160
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "http://tracking-api:8081/config",
+        "options": {
+          "timeout": 60000
+        }
+      }
+    },
+    {
+      "id": "baf924ce-b031-5b83-93a9-07d7ef5e38a8",
+      "name": "Pinterest Enabled?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        1220,
+        0
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "45021440-575c-5eba-ae1a-bdd309c7944d",
+              "leftValue": "={{ !($json.disabled_platforms || []).includes('pinterest') }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "d35cb296-1b88-5c13-b721-a379d72771aa",
+      "name": "YouTube Enabled?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        1460,
+        0
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "78b07fd0-39cd-575b-b147-35a6620f32bb",
+              "leftValue": "={{ !($('Load Config').first().json.disabled_platforms || []).includes('youtube') }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
       "id": "de587463-a6e1-59da-95b4-4205b8f2abf4",
       "name": "Pinterest Head",
       "type": "n8n-nodes-base.code",
@@ -235,7 +320,7 @@
         0
       ],
       "parameters": {
-        "jsCode": "const get = (n) => { try { return $(n).last().json; } catch (e) { return null; } };\n\nconst job = $('Keep Job').first().json;\nconst ig = job.instagram || {};\nconst fb = get('Check Facebook Path') || {};\nconst pin = get('Check Pinterest Path') || {};\nconst yt = get('Check YouTube Path') || {};\nconst ok = (r) => r.status === 'validated' && r.validate_only === true;\nreturn [{ json: {\n  product_id: job.product_id,\n  filename: job.filename,\n  media_ok: !!(job.media && job.media.ok),\n  media_error: (job.media && job.media.error) || null,\n  instagram_ok: ok(ig),\n  facebook_ok: ok(fb),\n  pinterest_ok: ok(pin),\n  youtube_ok: ok(yt),\n  instagram: { status: ig.status, container_id: ig.container_id || null, status_code: ig.status_code || null, error: ig.error_message || ig.error || null },\n  facebook: { status: fb.status, page_id: fb.page_id || null, page_name: fb.page_name || null, upload_session: fb.upload_session || null, error: fb.error_message || fb.error || null },\n  pinterest: { status: pin.status, is_video: pin.is_video === true, board_id: pin.board_id || null, media_id: pin.media_id || null, media_status: pin.media_status || null, error: pin.error_message || pin.error || null },\n  youtube: { status: yt.status, privacy_status: yt.privacy_status || null, shorts: yt.shorts === true, error: yt.error_message || yt.error || null },\n  published_anything: false\n} }];\n"
+        "jsCode": "const get = (n) => { try { return $(n).last().json; } catch (e) { return null; } };\n\nconst job = $('Keep Job').first().json;\nconst ig = job.instagram || {};\nconst fb = get('Check Facebook Path') || {};\nconst pin = get('Check Pinterest Path') || {};\nconst yt = get('Check YouTube Path') || {};\nconst ok = (r) => r.status === 'validated' && r.validate_only === true;\nconst disabled = (get('Load Config') || {}).disabled_platforms || [];\nreturn [{ json: {\n  product_id: job.product_id,\n  filename: job.filename,\n  media_ok: !!(job.media && job.media.ok),\n  media_error: (job.media && job.media.error) || null,\n  instagram_ok: ok(ig),\n  facebook_ok: ok(fb),\n  disabled_platforms: disabled,\n  pinterest_ok: disabled.includes('pinterest') || ok(pin),\n  youtube_ok: disabled.includes('youtube') || ok(yt),\n  instagram: { status: ig.status, container_id: ig.container_id || null, status_code: ig.status_code || null, error: ig.error_message || ig.error || null },\n  facebook: { status: fb.status, page_id: fb.page_id || null, page_name: fb.page_name || null, upload_session: fb.upload_session || null, error: fb.error_message || fb.error || null },\n  pinterest: { status: pin.status, is_video: pin.is_video === true, board_id: pin.board_id || null, media_id: pin.media_id || null, media_status: pin.media_status || null, error: pin.error_message || pin.error || null },\n  youtube: { status: yt.status, privacy_status: yt.privacy_status || null, shorts: yt.shorts === true, error: yt.error_message || yt.error || null },\n  published_anything: false\n} }];\n"
       }
     }
   ],
@@ -321,7 +406,36 @@
       "main": [
         [
           {
+            "node": "Load Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Config": {
+      "main": [
+        [
+          {
+            "node": "Pinterest Enabled?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Pinterest Enabled?": {
+      "main": [
+        [
+          {
             "node": "Pinterest Head",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "YouTube Enabled?",
             "type": "main",
             "index": 0
           }
@@ -343,7 +457,25 @@
       "main": [
         [
           {
+            "node": "YouTube Enabled?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "YouTube Enabled?": {
+      "main": [
+        [
+          {
             "node": "YouTube Head",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Summarize Check",
             "type": "main",
             "index": 0
           }

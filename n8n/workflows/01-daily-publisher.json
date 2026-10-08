@@ -456,6 +456,74 @@
       "onError": "continueRegularOutput"
     },
     {
+      "id": "77fd4913-1ab7-5c23-a8e6-ffe2bb88ed55",
+      "name": "Pinterest Enabled?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        3520,
+        520
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "ad35e228-83bf-55ed-b333-e21db35fc431",
+              "leftValue": "={{ !($('Load Config').first().json.disabled_platforms || []).includes('pinterest') }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "415afd9c-c546-5799-a184-ba1afba8aaa8",
+      "name": "YouTube Enabled?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        3760,
+        520
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "4d2805c6-d205-5cab-8d55-2767604d6e97",
+              "leftValue": "={{ !($('Load Config').first().json.disabled_platforms || []).includes('youtube') }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
       "id": "9e440d89-1d6e-58ed-b0ae-624beeb8d74b",
       "name": "Pinterest Job",
       "type": "n8n-nodes-base.code",
@@ -815,7 +883,25 @@
       "main": [
         [
           {
+            "node": "Pinterest Enabled?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Pinterest Enabled?": {
+      "main": [
+        [
+          {
             "node": "Pinterest Job",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "YouTube Enabled?",
             "type": "main",
             "index": 0
           }
@@ -837,7 +923,25 @@
       "main": [
         [
           {
+            "node": "YouTube Enabled?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "YouTube Enabled?": {
+      "main": [
+        [
+          {
             "node": "YouTube Job",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Finalize Product",
             "type": "main",
             "index": 0
           }

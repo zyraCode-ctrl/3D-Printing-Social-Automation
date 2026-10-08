@@ -178,9 +178,14 @@ def validate(strict: bool, expect_live: bool | None, preflight: bool = False, de
     add("Facebook Page id configured", str(cfg.get("facebook_page_id")) == EXPECTED_PAGE_ID, f"configured={cfg.get('facebook_page_id')} expected={EXPECTED_PAGE_ID}", critical=True)
     add("Instagram account id configured", bool(cfg.get("instagram_business_account_id")), f"{cfg.get('instagram_business_account_id')}")
     add("AI: Gemini primary + Groq fallback", cfg.get("ai_provider") == "gemini" and cfg.get("ai_fallback_provider") == "groq", f"{cfg.get('ai_provider')}/{cfg.get('ai_fallback_provider')}")
-    add("YouTube format is Shorts", cfg.get("youtube_format") == "shorts", f"{cfg.get('youtube_format')} privacy={cfg.get('youtube_privacy_status')}")
-    add("YouTube Shorts are public", cfg.get("youtube_privacy_status") == "public", f"privacy={cfg.get('youtube_privacy_status')}")
-    add("Pinterest board configured", bool(cfg.get("pinterest_board_id")), f"board={cfg.get('pinterest_board_id')}")
+    off = set(cfg.get("disabled_platforms") or [])
+    for platform in sorted(off):
+        add(f"{platform.capitalize()}: automation turned off (not checked, never published)", True, "disabled_platforms in config/settings.json")
+    if "youtube" not in off:
+        add("YouTube format is Shorts", cfg.get("youtube_format") == "shorts", f"{cfg.get('youtube_format')} privacy={cfg.get('youtube_privacy_status')}")
+        add("YouTube Shorts are public", cfg.get("youtube_privacy_status") == "public", f"privacy={cfg.get('youtube_privacy_status')}")
+    if "pinterest" not in off:
+        add("Pinterest board configured", bool(cfg.get("pinterest_board_id")), f"board={cfg.get('pinterest_board_id')}")
 
     status, run = stack.run(PROBES["meta"], timeout=180)
     meta = node_json(run, "Summarize Probe")
@@ -201,19 +206,21 @@ def validate(strict: bool, expect_live: bool | None, preflight: bool = False, de
     for c in meta_token_checks(meta.get("page_token_debug") or {}, EXPECTED_PAGE_ID, time.time()):
         add(c["check"], c["ok"], c["detail"], blocking=not c.get("advisory"))
 
-    status, run = stack.run(PROBES["youtube"], timeout=180)
-    yt = node_json(run, "Summarize Probe")
-    add("YouTube: OAuth works (channels.list mine=true)", status == "success" and yt.get("oauth_ok"), f"channels={[(c.get('id'), c.get('title')) for c in yt.get('channels_found') or []]} error={yt.get('error')}")
+    if "youtube" not in off:
+        status, run = stack.run(PROBES["youtube"], timeout=180)
+        yt = node_json(run, "Summarize Probe")
+        add("YouTube: OAuth works (channels.list mine=true)", status == "success" and yt.get("oauth_ok"), f"channels={[(c.get('id'), c.get('title')) for c in yt.get('channels_found') or []]} error={yt.get('error')}")
 
-    status, run = stack.run(PROBES["pinterest"], timeout=180)
-    pin = node_json(run, "Summarize Probe")
-    board_ids = {str(b.get("id")) for b in pin.get("boards_found") or []}
-    add(
-        "Pinterest: OAuth works and PINTEREST_BOARD_ID is one of the account's boards",
-        status == "success" and pin.get("oauth_ok") and str(cfg.get("pinterest_board_id")) in board_ids,
-        f"user={pin.get('username')} board={cfg.get('pinterest_board_id')} in_account={str(cfg.get('pinterest_board_id')) in board_ids} error={pin.get('error')}",
-        blocking=False,
-    )
+    if "pinterest" not in off:
+        status, run = stack.run(PROBES["pinterest"], timeout=180)
+        pin = node_json(run, "Summarize Probe")
+        board_ids = {str(b.get("id")) for b in pin.get("boards_found") or []}
+        add(
+            "Pinterest: OAuth works and PINTEREST_BOARD_ID is one of the account's boards",
+            status == "success" and pin.get("oauth_ok") and str(cfg.get("pinterest_board_id")) in board_ids,
+            f"user={pin.get('username')} board={cfg.get('pinterest_board_id')} in_account={str(cfg.get('pinterest_board_id')) in board_ids} error={pin.get('error')}",
+            blocking=False,
+        )
 
     status, run = stack.run(PROBES["groq"], timeout=180)
     groq = node_json(run, "Summarize Probe")
@@ -266,16 +273,18 @@ def validate(strict: bool, expect_live: bool | None, preflight: bool = False, de
             f"fb={fb.get('status')} page={fb.get('page_id')} ({fb.get('page_name')}) fb_error={fb.get('error')} exec={status}",
         )
         pin, yt = path.get("pinterest") or {}, path.get("youtube") or {}
-        add(
-            "Publish path (no posting): Pinterest video uploaded + processed for a Video Pin",
-            status == "success" and bool(path.get("pinterest_ok")),
-            f"pin={pin.get('status')} video={pin.get('is_video')} board={pin.get('board_id')} media={pin.get('media_id')}/{pin.get('media_status')} pin_error={pin.get('error')}",
-        )
-        add(
-            "Publish path (no posting): YouTube Shorts upload session accepted",
-            status == "success" and bool(path.get("youtube_ok")),
-            f"yt={yt.get('status')} privacy={yt.get('privacy_status')} shorts={yt.get('shorts')} yt_error={yt.get('error')}",
-        )
+        if "pinterest" not in off:
+            add(
+                "Publish path (no posting): Pinterest video uploaded + processed for a Video Pin",
+                status == "success" and bool(path.get("pinterest_ok")),
+                f"pin={pin.get('status')} video={pin.get('is_video')} board={pin.get('board_id')} media={pin.get('media_id')}/{pin.get('media_status')} pin_error={pin.get('error')}",
+            )
+        if "youtube" not in off:
+            add(
+                "Publish path (no posting): YouTube Shorts upload session accepted",
+                status == "success" and bool(path.get("youtube_ok")),
+                f"yt={yt.get('status')} privacy={yt.get('privacy_status')} shorts={yt.get('shorts')} yt_error={yt.get('error')}",
+            )
 
     ok = all(c["ok"] for c in checks if c["blocking"])
     report = {"at": datetime.now(timezone.utc).isoformat(timespec="seconds"), "ok": ok, "strict": strict, "checks": checks}

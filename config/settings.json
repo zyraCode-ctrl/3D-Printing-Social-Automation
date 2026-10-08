@@ -3,6 +3,7 @@
   "markets": ["United States", "Canada", "United Kingdom", "Australia"],
   "supported_images": ["jpg", "jpeg", "png", "webp"],
   "supported_videos": ["mp4", "mov"],
+  "disabled_platforms": ["pinterest", "youtube"],
   "required_platforms": {
     "image": ["instagram", "facebook"],
     "video": ["instagram", "facebook", "youtube"],
