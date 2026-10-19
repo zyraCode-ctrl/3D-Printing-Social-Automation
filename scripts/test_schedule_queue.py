@@ -523,15 +523,15 @@ def test_meta_token() -> None:
 
 def test_disabled_platforms() -> None:
     os.environ.pop("DISABLED_PLATFORMS", None)
-    check("config: Pinterest and YouTube automation turned off", S.disabled_platforms() == ["pinterest", "youtube"], S.disabled_platforms())
-    check("only Instagram + Facebook are required while they are off", S.required_platforms("video") == ["instagram", "facebook"] and S.required_platforms("image") == ["instagram", "facebook"])
+    check("config: Pinterest automation turned off; YouTube on", S.disabled_platforms() == ["pinterest"], S.disabled_platforms())
+    check("video requires Instagram, Facebook and YouTube while Pinterest is off", S.required_platforms("video") == ["instagram", "facebook", "youtube"], S.required_platforms("video"))
     os.environ["DRY_RUN"] = "false"
-    for platform in ("pinterest", "youtube"):
-        r = S.can_publish(905, platform)
-        check(f"live: {platform} publish is blocked while turned off", r["allowed"] is False and r.get("disabled") is True, r)
+    pin = S.can_publish(905, "pinterest")
+    check("live: Pinterest publish is blocked while turned off", pin["allowed"] is False and pin.get("disabled") is True, pin)
+    check("live: YouTube publish is allowed when not disabled", S.can_publish(901, "youtube")["allowed"] is True)
     check("live: Instagram/Facebook unaffected by the switch", S.can_publish(901, "instagram")["allowed"] is True)
     os.environ["DRY_RUN"] = "true"
-    check("runtime config exposes the switch to n8n", S.runtime_config()["disabled_platforms"] == ["pinterest", "youtube"])
+    check("runtime config exposes the switch to n8n", S.runtime_config()["disabled_platforms"] == ["pinterest"])
 
 
 def test_video_platforms() -> None:
